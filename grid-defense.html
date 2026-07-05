@@ -1021,145 +1021,215 @@ class MenuScene extends Phaser.Scene {
     for (let y = 0; y <= H; y += 48) g.lineBetween(0, y, W, y);
   }
   render(){
+    this.tweens.killAll();
     this.uiRefs.forEach(o => o.destroy()); this.uiRefs = [];
+    this.previewDots = null;
     const c = C();
     const p = Profile.get();
     const add = o => { this.uiRefs.push(o); return o; };
     const saveData = RunSave.load();
-    add(T(this, W/2, 40, c.title, 36, "#2DD4BF", { fontStyle:"bold" }).setOrigin(0.5));
-    add(T(this, W/2, 72, c.subtitle, 14, PAL.muted).setOrigin(0.5));
-    add(T(this, W/2, 106,
-      (G.skin === "theory"
-        ? "Faults travel the bus toward the panel. Place the device that MATCHES each fault — the wrong one does nothing."
-        : "Hazards move through the site toward the crew. Place the control that MATCHES each hazard — the wrong one does nothing.") +
-      "\nAnswer questions before each wave to earn gold · get one right " + PROG.masteryNeed +
-      "× in a row to master it.",
-      12, PAL.text, { align:"center", lineSpacing: 5 }).setOrigin(0.5));
 
-    // selected map (respect level locks unless a ?map= override is active)
-    const unlockedMaps = MAPS.filter(m => m.unlock <= p.level);
-    let map = mapById(G.mapId);
-    if (!G.mapOverride && map.unlock > p.level) map = MAPS[0];
-    G.mapId = map.id;
+    /* header — title + skin chip + tagline */
+    const title = add(T(this, 60, 24, c.title, 40, "#2DD4BF", { fontStyle:"bold" }));
+    const chipX = 68 + title.width, chipW = 28 + c.skinLabel.length * 8;
+    const chip = this.add.graphics();
+    chip.fillStyle(PAL.amber, 1).fillRoundedRect(chipX, 38, chipW, 24, 6);
+    add(chip);
+    add(T(this, chipX + chipW/2, 50, c.skinLabel.toUpperCase(), 12, "#231703", { fontStyle:"bold" }).setOrigin(0.5));
+    add(T(this, 62, 74, c.subtitle, 14, PAL.muted));
+    add(T(this, 62, 96, (G.skin === "theory"
+      ? "Place the device that MATCHES each fault — pre-wave questions earn your gold."
+      : "Place the control that MATCHES each hazard — pre-wave questions earn your gold."),
+      12, PAL.text));
+    add(T(this, W - 24, 18, "ElectriAI Arcade", 12, PAL.muted).setOrigin(1, 0));
 
-    // config row + action row (CONTINUE appears when a run save exists)
-    const mkRow = (list, y) => {
-      const gapB = 12, totW = list.reduce((s, d) => s + d.w, 0) + gapB * (list.length - 1);
-      let bx = (W - totW) / 2;
-      list.forEach(d => { add(d.mk(bx + d.w / 2, y)); bx += d.w + gapB; });
-    };
-    mkRow([
-      { w: 170, mk: (x, y) => makeButton(this, x, y, 170, 38, "Skin: " + c.skinLabel, 12, () => {
-          G.skin = G.skin === "theory" ? "onboarding" : "theory";
-          Profile.setPref("skin", G.skin); this.render();
-        }) },
-      { w: 190, mk: (x, y) => makeButton(this, x, y, 190, 38, "Map: " + map.name, 12, () => {
-          const i = unlockedMaps.findIndex(m => m.id === map.id);
-          G.mapId = unlockedMaps[(i + 1) % unlockedMaps.length].id;
-          Profile.setPref("mapId", G.mapId); this.render();
-        }) },
-      { w: 190, mk: (x, y) => makeButton(this, x, y, 190, 38,
-          "Mode: " + (G.mode === "endless" ? "Endless ∞" : "Campaign"), 12, () => {
-          G.mode = G.mode === "endless" ? "campaign" : "endless";
-          Profile.setPref("mode", G.mode); this.render();
-        }) },
-    ], 144);
-    const actions = [
-      { w: 170, mk: (x, y) => makeButton(this, x, y, 170, 42, "▶ START", 15,
-          () => this.scene.start("Play"), { line: PAL.green, color:"#4ADE80" }) },
-    ];
-    if (saveData) actions.push({ w: 240, mk: (x, y) => makeButton(this, x, y, 240, 42,
-      "↻ CONTINUE · wave " + saveData.wave + (saveData.mode === "endless" ? " ∞" : ""), 12, () => {
-        G.skin = saveData.skin; G.mapId = saveData.mapId; G.mode = saveData.mode || "campaign";
-        this.scene.start("Play", { resume: saveData });
-      }, { line: PAL.amber, color:"#FBBF24" }) });
-    mkRow(actions, 188);
-
-    /* left card — question bank */
-    const cardY = 224, cardH = 250, bankX = 20, bankW = 452;
-    const bg = this.add.graphics();
-    bg.fillStyle(PAL.panel, 0.9).fillRoundedRect(bankX, cardY, bankW, cardH, 14);
-    bg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(bankX, cardY, bankW, cardH, 14);
-    add(bg);
-    add(T(this, bankX + 16, cardY + 12, "QUESTION BANK", 13, "#2DD4BF"));
-    const skinCount = BankState.questions.filter(q => q.skin === "both" || q.skin === G.skin).length;
-    const mastered = Profile.masteredCount(BankState.questions);
-    add(T(this, bankX + 16, cardY + 34,
-      BankState.source + " · " + BankState.questions.length + " questions (" + skinCount + " for this skin)\n" +
-      "★ mastered " + mastered + " / " + BankState.questions.length +
-      (BankState.custom ? (BankState.persisted ? " · saved locally" : " · storage unavailable — this session only") : ""),
-      11, PAL.muted, { lineSpacing: 4 }));
-    const bBtnY = cardY + 92;
-    add(makeButton(this, bankX + 86, bBtnY, 136, 38, "Upload file", 12,
-      () => document.getElementById("qfile").click()));
-    add(makeButton(this, bankX + 238, bBtnY, 150, 38, "Reset to sample", 11, () => {
-      BankState.resetToSample();
-      this.summary = { text: "Restored the bundled sample bank (" + BankState.questions.length + " questions).", color: "#4ADE80" };
-      this.render();
-    }));
-    add(makeButton(this, bankX + 380, bBtnY, 120, 38, "CSV template", 10, downloadTemplate, { color: PAL.muted }));
-    add(T(this, bankX + 16, cardY + 120,
-      "Drop a .csv or .json anywhere, or Upload. Columns: question,\n" +
-      "choices (A|B|C), answer (exact text), why, difficulty, skin, category.",
-      10, PAL.muted, { lineSpacing: 4 }));
-    if (this.summary){
-      add(T(this, bankX + 16, cardY + 158, this.summary.text, 10, this.summary.color,
-        { wordWrap: { width: bankW - 32 }, lineSpacing: 3 }));
-    }
-
-    /* right card — operator profile + maps */
-    const px = 488, pw2 = 452;
+    /* left panel — animated preview of the selected map */
+    const map = MAPS[this.mapIdx];
+    const locked = map.unlock > p.level && !G.mapOverride;
+    const pnX = 60, pnY = 126, pnW = 330, pnH = 284;
     const pg = this.add.graphics();
-    pg.fillStyle(PAL.panel, 0.9).fillRoundedRect(px, cardY, pw2, cardH, 14);
-    pg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(px, cardY, pw2, cardH, 14);
+    pg.fillStyle(PAL.panel, 0.92).fillRoundedRect(pnX, pnY, pnW, pnH, 14);
+    pg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(pnX, pnY, pnW, pnH, 14);
     add(pg);
-    add(T(this, px + 16, cardY + 12, "OPERATOR PROFILE", 13, "#2DD4BF"));
-    add(makeButton(this, px + pw2 - 70, cardY + 24, 104, 30, "STATS", 11,
-      () => this.showStats(), { color: PAL.muted }));
-    add(T(this, px + 16, cardY + 34, "Lv " + p.level + " · " + Profile.rank(p.level), 15, PAL.text));
-    add(T(this, px + pw2 - 130, cardY + 40, p.xp + " / " + Profile.xpToNext(p.level) + " XP", 10, PAL.muted).setOrigin(1, 0));
-    const xbW = pw2 - 32, xbY = cardY + 60;
-    const xb = this.add.graphics();
-    xb.fillStyle(0x0B1E2D, 1).fillRoundedRect(px + 16, xbY, xbW, 8, 4);
-    const frac = Math.min(1, p.xp / Profile.xpToNext(p.level));
-    if (frac > 0.02) xb.fillStyle(PAL.violet, 1).fillRoundedRect(px + 16, xbY, Math.max(8, xbW * frac), 8, 4);
-    xb.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(px + 16, xbY, xbW, 8, 4);
-    add(xb);
-    const acc = p.life.qAsked ? Math.round(100 * p.life.qCorrect / p.life.qAsked) : 0;
-    add(T(this, px + 16, cardY + 78,
-      p.life.games + " games · " + p.life.wins + " wins · best score " + p.life.bestScore +
-      " · best wave " + p.life.bestWave + " · answers " + acc + "%",
-      10, PAL.muted));
-    add(T(this, px + 16, cardY + 102, "MAPS — unlock by leveling up", 12, "#2DD4BF"));
-    let my = cardY + 124;
-    MAPS.forEach(m2 => {
-      const locked = m2.unlock > p.level;
-      const sel = m2.id === map.id;
-      const ms = p.life.maps[m2.id];
-      const right = locked ? "unlocks Lv " + m2.unlock
-        : ms ? "best W" + ms.bestWave + " · " + ms.wins + " win" + (ms.wins === 1 ? "" : "s") : "unplayed";
-      const row = add(T(this, px + 16, my, (sel ? "▶ " : "· ") + m2.name, 12,
-        locked ? PAL.muted : sel ? "#4ADE80" : PAL.text));
-      add(T(this, px + pw2 - 16, my + 2, right, 10, PAL.muted).setOrigin(1, 0));
-      if (!locked){
-        row.setInteractive({ useHandCursor: true });
-        row.on("pointerup", () => { G.mapId = m2.id; Profile.setPref("mapId", m2.id); SFX.ui(); this.render(); });
-      }
-      my += 22;
+    // the map's board drawn to scale
+    const gx = pnX + 22, gy = pnY + 18, gw = pnW - 44, gh = 138;
+    const t = Math.min(gw / COLS, gh / ROWS);
+    const ox = gx + (gw - t * COLS) / 2, oy = gy + (gh - t * ROWS) / 2;
+    const px = col => ox + (col + 0.5) * t, py = row => oy + (row + 0.5) * t;
+    const mg = this.add.graphics();
+    mg.fillStyle(0x0E1930, 1).fillRoundedRect(gx - 8, gy - 8, gw + 16, gh + 16, 10);
+    mg.lineStyle(1, PAL.grid, 0.6);
+    for (let i = 0; i <= COLS; i++) mg.lineBetween(ox + i*t, oy, ox + i*t, oy + ROWS*t);
+    for (let i = 0; i <= ROWS; i++) mg.lineBetween(ox, oy + i*t, ox + COLS*t, oy + i*t);
+    const pts = map.cells.map(([cc, rr]) => ({ x: px(cc), y: py(rr) }));
+    mg.lineStyle(t * 0.72, PAL.cyan, locked ? 0.08 : 0.22);
+    for (let i = 1; i < pts.length; i++) mg.lineBetween(pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y);
+    mg.lineStyle(2, PAL.cyan, locked ? 0.3 : 0.9);
+    for (let i = 1; i < pts.length; i++) mg.lineBetween(pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y);
+    // code/tag markers on the path
+    Object.entries(map.tags[G.skin] || {}).forEach(([tag, idxs]) => {
+      const td = c.tileTags[tag]; if (!td) return;
+      idxs.forEach(i => { const cell = map.cells[i]; if (!cell) return;
+        mg.fillStyle(td.color, locked ? 0.35 : 0.95);
+        mg.fillRect(px(cell[0]) - t*0.28, py(cell[1]) - t*0.28, t*0.56, t*0.56); });
     });
-    add(T(this, px + 16, my + 4,
-      (G.mapOverride && map.unlock > p.level ? "URL preview · " : "") + map.blurb, 9,
-      PAL.muted, { wordWrap: { width: pw2 - 32 } }));
+    // entry marker + panel at the end of the bus
+    mg.fillStyle(PAL.green, locked ? 0.35 : 1).fillCircle(pts[0].x, pts[0].y, t * 0.32);
+    add(mg);
+    const endR = this.add.rectangle(pts[pts.length-1].x, pts[pts.length-1].y, t*1.1, t*1.1, PAL.amber, locked ? 0.35 : 1);
+    add(endR);
+    if (!REDUCED && !locked) this.tweens.add({ targets: endR, alpha: 0.4, duration: 700, yoyo: true, repeat: -1 });
+    if (locked){
+      add(T(this, gx + gw/2, gy + gh/2 - 10, "LOCKED", 20, "#FBBF24", { fontStyle:"bold" }).setOrigin(0.5));
+      add(T(this, gx + gw/2, gy + gh/2 + 14, "reach Lv " + map.unlock, 12, PAL.text).setOrigin(0.5));
+    } else {
+      // faults/hazards traveling the bus
+      this.previewPts = pts;
+      this.previewDots = [0, 1, 2].map(i => {
+        const e = c.enemies[i % c.enemies.length];
+        const d = { t: i / 3, speed: 1 / 9000,
+          obj: this.add.circle(pts[0].x, pts[0].y, Math.max(3, t*0.26), e.color) };
+        add(d.obj);
+        const q = this.pathPoint(d.t); d.obj.setPosition(q.x, q.y);
+        return d;
+      });
+    }
+    // map cyclers + info
+    add(makeButton(this, pnX + 24, gy + gh/2, 34, 44, "<", 15, () => this.cycleMap(-1)));
+    add(makeButton(this, pnX + pnW - 24, gy + gh/2, 34, 44, ">", 15, () => this.cycleMap(1)));
+    const iy = pnY + 176;
+    add(T(this, pnX + pnW/2, iy, map.name, 19, PAL.text, { fontStyle:"bold" }).setOrigin(0.5, 0));
+    const ms = p.life.maps[map.id];
+    const bestLine = locked ? "unlocks at Lv " + map.unlock
+      : ms ? "best wave " + ms.bestWave + " · " + ms.wins + " win" + (ms.wins === 1 ? "" : "s") : "unplayed";
+    add(T(this, pnX + pnW/2, iy + 28, "MAP " + (this.mapIdx + 1) + "/" + MAPS.length + " · " + bestLine, 11, PAL.muted).setOrigin(0.5, 0));
+    add(T(this, pnX + pnW/2, iy + 50, (G.mapOverride && map.unlock > p.level ? "URL preview · " : "") + map.blurb, 11, PAL.muted,
+      { wordWrap:{ width: pnW - 44 }, align:"center", lineSpacing: 3 }).setOrigin(0.5, 0));
+    add(T(this, pnX + pnW/2, pnY + pnH + 12, "?skin=onboarding · ?map=<id> open a skin or map directly", 9, PAL.muted).setOrigin(0.5, 0));
 
-    /* footer */
-    add(T(this, 20, H - 26, "Sound: " + (G.muted ? "off" : "on") + " · tap to toggle", 10, PAL.muted)
+    /* right stack — actions */
+    const rx = 690, rw = 310;
+    let yy = 138;
+    const row = (h, mk) => { const b = mk(yy + h/2); yy += h + 8; return b; };
+    if (saveData){
+      row(56, cy => add(makeButton(this, rx, cy, rw, 56,
+        "CONTINUE · WAVE " + saveData.wave + (saveData.mode === "endless" ? " ∞" : ""), 16, () => {
+          G.skin = saveData.skin; G.mapId = saveData.mapId; G.mode = saveData.mode || "campaign";
+          this.scene.start("Play", { resume: saveData });
+        }, { line: PAL.amber, color:"#FBBF24", labelStyle:{ fontStyle:"bold" } })));
+      const sb = row(44, cy => add(makeButton(this, rx, cy, rw, 44, "▶ NEW RUN", 14,
+        () => this.scene.start("Play"), { line: PAL.green, color:"#4ADE80" })));
+      if (locked) sb.setDisabled(true);
+    } else {
+      const sb = row(56, cy => add(makeButton(this, rx, cy, rw, 56, "▶ START", 18,
+        () => this.scene.start("Play"), { line: PAL.green, color:"#4ADE80", labelStyle:{ fontStyle:"bold" } })));
+      if (locked) sb.setDisabled(true);
+      yy += 8; // small extra breather under the primary action
+    }
+    row(44, cy => add(makeButton(this, rx, cy, rw, 44, "QUESTION BANK", 13, () => this.openBank())));
+    row(44, cy => add(makeButton(this, rx, cy, rw, 44, "STATS", 13, () => this.showStats())));
+    row(40, cy => add(makeButton(this, rx, cy, rw, 40,
+      "MODE: " + (G.mode === "endless" ? "ENDLESS ∞" : "CAMPAIGN"), 12, () => {
+        G.mode = G.mode === "endless" ? "campaign" : "endless";
+        Profile.setPref("mode", G.mode); this.render();
+      })));
+    add(T(this, rx, yy - 4, G.mode === "endless"
+      ? "Waves keep escalating — how deep can you hold?"
+      : BAL.waves + " waves · boss every 5th", 11, PAL.muted).setOrigin(0.5, 0));
+    yy += 18;
+    row(40, cy => add(makeButton(this, rx, cy, rw, 40, "SKIN: " + c.skinLabel.toUpperCase(), 12, () => {
+      G.skin = G.skin === "theory" ? "onboarding" : "theory";
+      Profile.setPref("skin", G.skin); this.render();
+    })));
+
+    /* upload/bank status toast */
+    if (this.summary) add(T(this, W/2, 480, this.summary.text, 10, this.summary.color,
+      { wordWrap:{ width: 880 }, align:"center" }).setOrigin(0.5));
+
+    /* bottom bar — profile at a glance */
+    const bar = this.add.graphics();
+    bar.fillStyle(0x0D1526, 0.92).fillRect(0, H - 44, W, 44);
+    bar.lineStyle(1, PAL.panelLine, 1).lineBetween(0, H - 44, W, H - 44);
+    add(bar);
+    add(T(this, 20, H - 30, "LV " + p.level + " · " + Profile.rank(p.level), 13, "#A78BFA", { fontStyle:"bold" }));
+    const xbX = 200, xbW = 150, frac = Math.min(1, p.xp / Profile.xpToNext(p.level));
+    const xb = this.add.graphics();
+    xb.fillStyle(0x0B1E2D, 1).fillRoundedRect(xbX, H - 26, xbW, 8, 4);
+    if (frac > 0.02) xb.fillStyle(PAL.violet, 1).fillRoundedRect(xbX, H - 26, Math.max(8, xbW * frac), 8, 4);
+    xb.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(xbX, H - 26, xbW, 8, 4);
+    add(xb);
+    add(T(this, xbX + xbW + 12, H - 30, p.xp + "/" + Profile.xpToNext(p.level) + " XP", 10, PAL.muted));
+    const mastered = Profile.masteredCount(BankState.questions);
+    add(T(this, W/2 + 40, H - 30, "★ " + mastered + " / " + BankState.questions.length +
+      " mastered · best score " + p.life.bestScore, 11, PAL.muted).setOrigin(0.5, 0));
+    add(T(this, W - 150, H - 30, "Sound: " + (G.muted ? "off" : "on"), 11, PAL.muted).setOrigin(1, 0)
       .setInteractive({ useHandCursor: true })
       .on("pointerup", () => { G.muted = !G.muted; Profile.setPref("muted", G.muted); this.render(); }));
-    add(T(this, W/2, H - 26, "?skin=onboarding · ?map=<id> open a skin or map directly", 10, PAL.muted).setOrigin(0.5, 0));
-    add(T(this, W - 20, H - 26, "Instructor tools ↗", 10, "#2DD4BF").setOrigin(1, 0)
+    add(T(this, W - 20, H - 30, "Instructor tools ↗", 11, "#2DD4BF").setOrigin(1, 0)
       .setInteractive({ useHandCursor: true })
       .on("pointerup", () => window.open("instructor.html")));
   }
+  cycleMap(dir){
+    this.mapIdx = (this.mapIdx + dir + MAPS.length) % MAPS.length;
+    const m = MAPS[this.mapIdx];
+    if (m.unlock <= Profile.get().level || G.mapOverride){
+      G.mapId = m.id; Profile.setPref("mapId", m.id);
+    }
+    this.render();
+  }
+  pathPoint(f){
+    const pts = this.previewPts, n = pts.length - 1;
+    const s = Math.min(f * n, n - 0.0001), i = Math.floor(s), r = s - i;
+    return { x: pts[i].x + (pts[i+1].x - pts[i].x) * r, y: pts[i].y + (pts[i+1].y - pts[i].y) * r };
+  }
+  update(_, delta){
+    if (!this.previewDots || REDUCED) return;
+    this.previewDots.forEach(d => {
+      d.t = (d.t + delta * d.speed) % 1;
+      const q = this.pathPoint(d.t);
+      d.obj.setPosition(q.x, q.y);
+    });
+  }
+  openBank(){
+    if (this.bankObjs) return;
+    const objs = [];
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x0D1526, 0.8).setDepth(90)
+      .setInteractive().on("pointerup", () => this.closeBank());
+    const pw = 640, ph = 330, x0 = W/2 - pw/2, top = (H - ph) / 2;
+    const g = this.add.graphics().setDepth(91);
+    g.fillStyle(PAL.panel, 0.98).fillRoundedRect(x0, top, pw, ph, 14);
+    g.lineStyle(2, PAL.cyan, 1).strokeRoundedRect(x0, top, pw, ph, 14);
+    objs.push(dim, g);
+    const put = (x, y, txt, size, color, extra) => {
+      const o = T(this, x, y, txt, size, color, extra).setDepth(92); objs.push(o); return o; };
+    const btn = (x, y, w, h, label, size, fn, opts) => {
+      const b = makeButton(this, x, y, w, h, label, size, fn, opts).setDepth(92); objs.push(b); return b; };
+    put(W/2, top + 18, "QUESTION BANK", 15, "#2DD4BF", { fontStyle:"bold" }).setOrigin(0.5);
+    const skinCount = BankState.questions.filter(q => q.skin === "both" || q.skin === G.skin).length;
+    const mastered = Profile.masteredCount(BankState.questions);
+    put(x0 + 28, top + 46,
+      BankState.source + " · " + BankState.questions.length + " questions (" + skinCount + " for this skin)\n" +
+      "★ mastered " + mastered + " / " + BankState.questions.length +
+      (BankState.custom ? (BankState.persisted ? " · saved locally" : " · storage unavailable — this session only") : ""),
+      12, PAL.text, { lineSpacing: 5 });
+    const by = top + 128;
+    btn(x0 + 110, by, 160, 40, "Upload file", 13, () => document.getElementById("qfile").click());
+    btn(x0 + 300, by, 180, 40, "Reset to sample", 12, () => {
+      BankState.resetToSample();
+      this.summary = { text: "Restored the bundled sample bank (" + BankState.questions.length + " questions).", color: "#4ADE80" };
+      this.render(); this.closeBank(); this.openBank();
+    });
+    btn(x0 + 500, by, 170, 40, "CSV template", 12, downloadTemplate, { color: PAL.muted });
+    put(x0 + 28, top + 162,
+      "Drop a .csv or .json anywhere, or Upload. Columns: question, choices (A|B|C),\n" +
+      "answer (exact text), why, difficulty, skin, category.",
+      11, PAL.muted, { lineSpacing: 4 });
+    if (this.summary) put(x0 + 28, top + 212, this.summary.text, 11, this.summary.color,
+      { wordWrap:{ width: pw - 56 }, lineSpacing: 3 });
+    put(W/2, top + ph - 18, "click outside to close", 9, PAL.muted).setOrigin(0.5);
+    this.bankObjs = objs;
+  }
+  closeBank(){ if (this.bankObjs){ this.bankObjs.forEach(o => o.destroy()); this.bankObjs = null; } }
   showStats(){
     if (this.statObjs) return;
     const p = Profile.get();
@@ -1244,6 +1314,7 @@ class MenuScene extends Phaser.Scene {
       SFX.correct();
     }
     this.render();
+    this.closeBank(); this.openBank(); // surface the result where the bank lives
   }
   skipText(skipped){
     if (!skipped.length) return "";
