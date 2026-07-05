@@ -1,0 +1,54 @@
+[
+  {
+    "question": "A device that trips only on current leaking to ground is a…",
+    "choices": ["GFCI", "AFCI", "SPD", "Fuse"],
+    "answer": "GFCI",
+    "why": "GFCI protects people from ground faults.",
+    "difficulty": "easy",
+    "skin": "theory",
+    "category": "GBF"
+  },
+  {
+    "question": "A bathroom receptacle requires which device?",
+    "choices": ["GFCI", "AFCI", "Fuse"],
+    "answer": "GFCI",
+    "why": "NEC requires GFCI at wet locations.",
+    "difficulty": "easy",
+    "skin": "onboarding",
+    "category": "GBF"
+  },
+  {
+    "question": "Which device is single-use and must be replaced after it operates?",
+    "choices": ["Fuse", "Circuit breaker", "GFCI"],
+    "answer": "Fuse",
+    "why": "A fuse blows once; a breaker resets.",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Which device protects against transient overvoltage from lightning?",
+    "choices": ["SPD", "GFCI", "AFCI", "Fuse"],
+    "answer": "SPD",
+    "why": "An SPD clamps surges; overcurrent devices do not.",
+    "difficulty": "medium",
+    "skin": "theory",
+    "category": "OCP"
+  },
+  {
+    "question": "Bedroom branch circuits require…",
+    "choices": ["AFCI", "GFCI", "SPD"],
+    "answer": "AFCI",
+    "why": "AFCI detects arcing in dwelling circuits.",
+    "difficulty": "medium",
+    "skin": "both",
+    "category": "OCP"
+  },
+  {
+    "question": "Nuisance-tripping a 15 A breaker on a heavy load is best fixed by…",
+    "choices": ["Correct sizing / dedicated circuit", "Bigger breaker only", "Removing the breaker"],
+    "answer": "Correct sizing / dedicated circuit",
+    "why": "Never upsize past the conductor's rating.",
+    "difficulty": "hard",
+    "skin": "both",
+    "category": "OCP"
+  }
+]

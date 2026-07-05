@@ -1,0 +1,7 @@
+question,choices,answer,why,difficulty,skin,category
+"A device that trips only on current leaking to ground is a…",GFCI|AFCI|SPD|Fuse,GFCI,"GFCI protects people from ground faults",easy,theory,GBF
+"A bathroom receptacle requires which device?",GFCI|AFCI|Fuse,GFCI,"NEC requires GFCI at wet locations",easy,onboarding,GBF
+"Bedroom branch circuits require…",AFCI|GFCI|SPD,AFCI,"AFCI detects arcing in dwelling circuits",medium,onboarding,OCP
+"Which device is single-use and must be replaced after it operates?",Fuse|Circuit breaker|GFCI,Fuse,"A fuse blows once; a breaker resets",easy,both,OCP
+"Which device protects against transient overvoltage from lightning?",SPD|GFCI|AFCI|Fuse,SPD,"An SPD clamps surges; overcurrent devices do not",medium,theory,OCP
+"Nuisance-tripping a 15 A breaker on a heavy load is best fixed by…",Correct sizing / dedicated circuit|Bigger breaker only|Removing the breaker,Correct sizing / dedicated circuit,"Never upsize past the conductor's rating",hard,both,OCP

@@ -1,0 +1,2496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Grid Defense — ElectriAI Arcade</title>
+<style>
+  html,body{margin:0;padding:0;background:#0D1526;height:100%;overflow:hidden;
+    font-family:"Segoe UI","Trebuchet MS",Verdana,sans-serif;}
+  #game{width:100vw;height:100vh;}
+  #game canvas{margin:0 auto;}
+  #dropzone{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(17,28,51,.92);border:3px dashed #2DD4BF;z-index:50;
+    color:#F1F5F9;font-size:28px;text-align:center;pointer-events:none;}
+  #dropzone.show{display:flex;}
+  #dropmsg{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:none;
+    background:#172642;border:1px solid #2DD4BF;border-radius:10px;padding:10px 18px;
+    color:#F1F5F9;font-size:14px;z-index:60;max-width:80vw;text-align:center;}
+  #dropmsg.show{display:block;}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+</head>
+<body>
+<div id="game"></div>
+<div id="dropzone">Drop a .csv or .json question file<br><span style="font-size:16px;color:#93A5C0">It becomes the active question bank</span></div>
+<div id="dropmsg"></div>
+<input type="file" id="qfile" accept=".csv,.json,application/json,text/csv" style="display:none">
+<script>
+"use strict";
+/* ============================================================
+   GRID DEFENSE — ElectriAI Arcade
+   Tower defense where the correct protective device IS the answer.
+   Questions (uploaded CSV/JSON) are the gold economy.
+   ============================================================ */
+
+/* ================= TUNABLE BALANCE BLOCK =====================
+   Everything a balance pass should touch lives here.           */
+const BAL = {
+  startGold: 40,          // seats ~1-2 basic towers
+  normalGold: 12,         // per correct answer, normal waves (2 questions)
+  bossGold: [30, 45, 65], // escalating streak payouts, boss waves (up to 3)
+  waves: 15,              // campaign length; every 5th wave is a boss
+  panelHP: 10,            // lives (theory: panel integrity / onboarding: safety score)
+  upgradeMult: 0.6,       // upgrade cost = base cost * this, per tier
+  sellRefund: 0.6,        // refund fraction of total invested
+  placeBonusGold: 12,     // one-time code/policy placement bonus
+  coordBonusGold: 3,      // selectivity: downstream device finishes a shared fault
+  waveBaseCount: 4,       // enemies in wave 1
+  waveCountGrowth: 0.6,   // +enemies per wave
+  bossCountMult: 1.3,     // boss wave enemy multiplier
+  hpGrowth: 0.05,         // +hp fraction per wave
+  speedGrowth: 0.02,      // +speed fraction per wave
+  spawnGapMs: 1200,       // gap between spawns (shrinks slightly per wave)
+  fuseCooldownMs: 5000,   // fuse "replace" time after it blows
+  miniBossHpMult: 4, miniBossSpeedMult: 0.6, miniBossLeak: 2,
+  supportBuff: 0.25,      // +damage for towers inside a support aura
+  supportSlow: 0.85,      // enemy speed multiplier inside support aura
+  stopWorkEveryMs: 5000, stopWorkFreezeMs: 1000, // Competent Person pulse
+  scoreClear: 10, scoreWave: 25, scoreAnswer: 15, scoreHpBonus: 20,
+};
+
+/* ================= PROGRESSION BLOCK =========================
+   Player XP / leveling / rank constants. The persistent profile
+   itself lives in the Profile module below.                     */
+const PROG = {
+  xpAnswer: 15,          // correct pre-wave answer
+  xpWave: 20,            // normal wave cleared
+  xpBossWave: 40,        // boss wave cleared (instead of xpWave)
+  xpWin: 150,            // campaign completed
+  xpPlaceBonus: 10,      // code/policy placement bonus claimed
+  xpMastered: 25,        // a question reaches mastered
+  masteryNeed: 2,        // correct-in-a-row to master a question
+  masteryNeedMax: 4,     // a miss raises the requirement, up to this
+  xpPerLevelBase: 100,   // XP to go from level 1 -> 2
+  xpPerLevelGrowth: 40,  // extra XP required per further level
+  ranks: [ [1,"Rookie"], [3,"Apprentice"], [6,"Journeyman"],
+           [9,"Foreman"], [12,"Master"], [15,"Chief Inspector"] ],
+};
+
+/* ================= CONTENT (dual-skin) =======================
+   Enemies / towers / prices / match table live HERE — data,
+   not code. Questions do NOT live here: they come from the
+   bundled sample below or a user-uploaded CSV/JSON file.       */
+const CONTENT = {
+  theory: {
+    title: "GRID DEFENSE",
+    subtitle: "Theory — match the protective device to the fault",
+    skinLabel: "Theory",
+    healthLabel: "Panel",
+    nouns: { enemies:"Faults", tower:"device", towers:"devices" },
+    leakWord: "Fault reached the panel!",
+    clearWord: "cleared",
+    loseTitle: "PANEL DOWN",
+    loseText: "Too many faults got through. Study the match table and rebuild.",
+    winTitle: "GRID SECURED",
+    winText: "Every wave cleared — the panel held.",
+    ticker: [
+      "A GFCI trips on ~4-6 mA of ground leakage — it protects PEOPLE.",
+      "An AFCI listens for the signature of arcing, not just overcurrent.",
+      "An SPD clamps transient overvoltage; overcurrent devices can't respond to a surge.",
+      "A fuse operates once; a breaker resets. Both need correct sizing.",
+      "An OVERSIZED breaker misses smaller overloads — size to the conductor.",
+      "Selective coordination: the device nearest the fault opens first.",
+      "Grounding gives fault current a low-impedance path so devices can clear it.",
+      "Overload = sustained overcurrent. Short circuit = bolted, instantaneous.",
+    ],
+    /* enemy color = the color of a device that stops it:
+       OL=fuse red, SC=breaker cyan, GF=GFCI green, AF=AFCI amber, SU=SPD violet */
+    enemies: [
+      { id:"overload",    label:"OVERLOAD", glyph:"OL", hp:30, speed:40, color:0xF87171, shape:"circle",  amps:true  },
+      { id:"short",       label:"SHORT CIRCUIT", glyph:"SC", hp:20, speed:75, color:0x2DD4BF, shape:"bolt" },
+      { id:"groundFault", label:"GROUND FAULT",  glyph:"GF", hp:26, speed:50, color:0x4ADE80, shape:"circle" },
+      { id:"arcFault",    label:"ARC FAULT",     glyph:"AF", hp:26, speed:55, color:0xFBBF24, shape:"diamond" },
+      { id:"surge",       label:"SURGE",         glyph:"SU", hp:16, speed:95, color:0xA78BFA, shape:"bolt" },
+    ],
+    intro: { overload:1, short:2, groundFault:3, arcFault:4, surge:6 },
+    towers: [
+      { id:"fuse",    label:"Fuse",            glyph:"FUSE", cost:20, range:80,  rate:0.8, power:26, color:0xF87171,
+        desc:"Stops shorts + overloads. Single-use: blows, then a replace cooldown.", special:"fuse" },
+      { id:"breaker", label:"Circuit Breaker", glyph:"CB",   cost:30, range:90,  rate:1.1, power:16, color:0x2DD4BF,
+        desc:"Stops overloads + shorts. Has an AMP RATING — oversized misses small overloads.", special:"breaker" },
+      { id:"gfci",    label:"GFCI",            glyph:"GFCI", cost:40, range:95,  rate:1.2, power:17, color:0x4ADE80,
+        desc:"Ground faults only. People-protection, not equipment-protection." },
+      { id:"afci",    label:"AFCI",            glyph:"AFCI", cost:40, range:95,  rate:1.2, power:17, color:0xFBBF24,
+        desc:"Arc faults only. Arc detection is not overcurrent detection." },
+      { id:"spd",     label:"SPD",             glyph:"SPD",  cost:45, range:110, rate:1.6, power:14,  color:0xA78BFA,
+        desc:"Surges only. Transient protection, not steady-state." },
+      { id:"ground",  label:"Grounding Node",  glyph:"GND",  cost:35, range:100, rate:0,   power:0,  color:0x93A5C0,
+        desc:"Support: weakens ground faults + boosts nearby devices. Grounding underpins clearing.", support:true },
+    ],
+    match: {
+      overload:    ["fuse","breaker"],
+      short:       ["fuse","breaker"],
+      groundFault: ["gfci"],
+      arcFault:    ["afci"],
+      surge:       ["spd"],
+    },
+    // path-tile tags -> towers that earn the code-placement bonus nearby.
+    // WHICH path cells carry a tag is per-map data (see MAPS.tags).
+    tileTags: { wet:{ label:"WET", color:0x2DD4BF, towers:["gfci"], note:"GFCI required at wet locations" },
+                dwelling:{ label:"DWL", color:0xFBBF24, towers:["afci"], note:"AFCI required on dwelling circuits" } },
+  },
+  onboarding: {
+    title: "SAFE SITE",
+    subtitle: "Onboarding — the right safety control makes the hazard safe",
+    skinLabel: "Onboarding",
+    healthLabel: "Safety",
+    nouns: { enemies:"Hazards", tower:"control", towers:"controls" },
+    leakWord: "Near-miss! Report it — every incident is preventable.",
+    clearWord: "made safe",
+    loseTitle: "STAND-DOWN",
+    loseText: "Too many near-misses — the site stands down to retrain. Safety is a team effort.",
+    winTitle: "ZERO INCIDENTS",
+    winText: "Project complete with a perfect safety record. That is the standard.",
+    ticker: [
+      "Anyone on site can use STOP-WORK AUTHORITY. Anyone.",
+      "PPE is the LAST line of defense — control the hazard first.",
+      "GFCI protection on all temporary site power. No exceptions.",
+      "Lockout/Tagout: de-energize AND verify zero energy before work.",
+      "A clean site is a safe site — cords, debris, and spills cause falls.",
+      "Fire watch continues after hot work ends — smolder starts late.",
+      "Report every near-miss. Near-misses are free lessons.",
+      "Focus Four: falls, electrocution, struck-by, caught-in/between.",
+    ],
+    /* hazard color = the color of a control that makes it safe:
+       SHK=GFCI Cart green, ARC=PPE cyan, FAL=Guardrail amber,
+       STB=Spotter orange, SLP=Barricade hi-vis, FIR=Fire Watch red */
+    enemies: [
+      { id:"shock",    label:"ELECTRICAL SHOCK", glyph:"SHK", hp:23, speed:55, color:0x4ADE80, shape:"tri" },
+      { id:"arcFlash", label:"ARC FLASH",        glyph:"ARC", hp:26, speed:45, color:0x2DD4BF, shape:"tri" },
+      { id:"fall",     label:"FALL HAZARD",      glyph:"FAL", hp:21, speed:60, color:0xFBBF24, shape:"tri" },
+      { id:"struckBy", label:"STRUCK-BY",        glyph:"STB", hp:25, speed:70, color:0xFB923C, shape:"tri" },
+      { id:"slipTrip", label:"SLIP / TRIP",      glyph:"SLP", hp:14, speed:65, color:0xA3E635, shape:"tri" },
+      { id:"fire",     label:"HOT WORK FIRE",    glyph:"FIR", hp:30, speed:40, color:0xEF4444, shape:"tri" },
+    ],
+    intro: { slipTrip:1, struckBy:2, shock:3, fall:4, fire:6, arcFlash:7 },
+    towers: [
+      { id:"loto",        label:"LOTO Station",     glyph:"LOTO", cost:30, range:90,  rate:1.0, power:17, color:0xF87171,
+        desc:"Shock + arc flash, at the source: de-energize and verify zero energy." },
+      { id:"gfciCart",    label:"GFCI Cart",        glyph:"GFCI", cost:40, range:95,  rate:1.2, power:17, color:0x4ADE80,
+        desc:"Shock: GFCI protection on all temporary site power." },
+      { id:"ppe",         label:"PPE Station",      glyph:"PPE",  cost:40, range:95,  rate:1.1, power:16, color:0x2DD4BF,
+        desc:"Arc flash (arc-rated gear). Softens struck-by severity. PPE is the LAST line of defense.", special:"ppe" },
+      { id:"guardrail",   label:"Guardrail / Fall", glyph:"RAIL", cost:35, range:90,  rate:1.1, power:17, color:0xFBBF24,
+        desc:"Falls: guardrails, hole covers, personal fall arrest at height." },
+      { id:"spotter",     label:"Spotter / Flagger",glyph:"SPOT", cost:20, range:85,  rate:1.0, power:14,  color:0xFB923C,
+        desc:"Struck-by: eyes on blind lifts, backing equipment, traffic." },
+      { id:"barricade",   label:"Barricade & Signs",glyph:"SIGN", cost:25, range:85,  rate:0.9, power:13,  color:0xA3E635,
+        desc:"Struck-by + slip/trip: delineate the zone, communicate the hazard." },
+      { id:"housekeeping",label:"Housekeeping Crew",glyph:"HSKP", cost:20, range:85,  rate:1.1, power:14,  color:0x4ADE80,
+        desc:"Slip/trip: cords managed, debris cleared, spills handled." },
+      { id:"fireWatch",   label:"Fire Watch",       glyph:"FW",   cost:30, range:90,  rate:1.0, power:17, color:0xEF4444,
+        desc:"Hot-work fire: watch during AND after welding or cutting." },
+      { id:"toolbox",     label:"Toolbox Talk",     glyph:"TALK", cost:35, range:100, rate:0,   power:0,  color:0x93A5C0,
+        desc:"Support: daily briefing — boosts nearby controls, lowers hazard severity.", support:true },
+      { id:"competent",   label:"Competent Person", glyph:"CP",   cost:35, range:100, rate:0,   power:0,  color:0xF1F5F9,
+        desc:"Support: boosts nearby controls + STOP-WORK pulses that halt hazards in range.", support:true, special:"stopwork" },
+    ],
+    match: {
+      shock:    ["loto","gfciCart"],
+      arcFlash: ["loto","ppe"],
+      fall:     ["guardrail"],
+      struckBy: ["spotter","barricade"],
+      slipTrip: ["housekeeping","barricade"],
+      fire:     ["fireWatch"],
+    },
+    tileTags: { wet:{ label:"WET", color:0x2DD4BF, towers:["gfciCart","loto"], note:"GFCI/LOTO required at wet or energized areas" },
+                height:{ label:"HGT", color:0xFBBF24, towers:["guardrail"], note:"Fall protection required at height" },
+                traffic:{ label:"TRF", color:0xFB923C, towers:["spotter","barricade"], note:"Spotter/barricade required in traffic zones" } },
+  },
+};
+/* ================= BUNDLED SAMPLE QUESTION BANK ==============
+   The game is fully playable with zero upload. Replace these by
+   uploading a CSV or JSON file from the Menu — NOT by editing code.
+   One question object:
+   { question: "prompt",                       // required
+     choices:  ["A","B","C"],                  // required, 2-6 options
+     answer:   "A",                            // required, exact TEXT of the
+                                               // correct choice (matched
+                                               // case/whitespace-insensitively)
+     why:      "one-line explanation",         // optional
+     difficulty: "easy"|"medium"|"hard",       // optional, default medium
+     skin:     "theory"|"onboarding"|"both",   // optional, default both
+     category: "free text", id: "unique" }     // optional
+   CSV upload uses the same fields as columns; choices are
+   pipe-delimited in one cell: GFCI|AFCI|SPD|Fuse                */
+const SAMPLE_QUESTIONS = [
+  // --- theory ---
+  { question:"Which device protects people by detecting current leaking to ground?",
+    choices:["GFCI","AFCI","SPD","Fuse"], answer:"GFCI",
+    why:"A GFCI trips on small ground-leakage currents (about 4-6 mA) to protect people.",
+    difficulty:"easy", skin:"theory", category:"Grounding" },
+  { question:"Which device detects dangerous arcing in a circuit?",
+    choices:["AFCI","GFCI","SPD","Fuse"], answer:"AFCI",
+    why:"An AFCI recognizes the electrical signature of arcing and opens the circuit.",
+    difficulty:"easy", skin:"theory", category:"Arc protection" },
+  { question:"A surge protective device (SPD) protects against…",
+    choices:["Transient overvoltages","Sustained overloads","Ground faults"], answer:"Transient overvoltages",
+    why:"SPDs clamp brief voltage spikes; overcurrent devices can't react to them.",
+    difficulty:"medium", skin:"theory", category:"Surge" },
+  { question:"Which device is single-use and must be replaced after it operates?",
+    choices:["Fuse","Circuit breaker","GFCI"], answer:"Fuse",
+    why:"A fuse blows once; a breaker resets.",
+    difficulty:"easy", skin:"theory", category:"Overcurrent" },
+  { question:"An overload is…",
+    choices:["Sustained current above the circuit rating","A bolted fault between conductors","Current leaking to ground"],
+    answer:"Sustained current above the circuit rating",
+    why:"Overload = too much current for too long; a short is a sudden low-impedance fault.",
+    difficulty:"medium", skin:"theory", category:"Overcurrent" },
+  { question:"A short circuit differs from an overload because it…",
+    choices:["Is a very high current through an unintended low-impedance path","Builds up slowly over hours","Only occurs outdoors"],
+    answer:"Is a very high current through an unintended low-impedance path",
+    why:"Shorts demand instantaneous clearing; overloads are cleared on a time delay.",
+    difficulty:"medium", skin:"theory", category:"Overcurrent" },
+  { question:"Why can an oversized breaker be dangerous?",
+    choices:["It may not trip on smaller overloads, letting conductors overheat","It trips too quickly","It uses more energy"],
+    answer:"It may not trip on smaller overloads, letting conductors overheat",
+    why:"Size the breaker to the conductor — protection sized too big protects nothing.",
+    difficulty:"hard", skin:"theory", category:"Sizing" },
+  { question:"The standard breaker rating for a 14 AWG copper branch circuit is…",
+    choices:["15 A","20 A","30 A","40 A"], answer:"15 A",
+    why:"14 AWG copper is protected at 15 A; 12 AWG at 20 A; 10 AWG at 30 A.",
+    difficulty:"hard", skin:"theory", category:"Sizing" },
+  { question:"Selective coordination means…",
+    choices:["The protective device nearest the fault opens first","All devices open at once","The main always opens first"],
+    answer:"The protective device nearest the fault opens first",
+    why:"Coordination confines the outage to the faulted branch and keeps the rest energized.",
+    difficulty:"hard", skin:"theory", category:"Coordination" },
+  // --- onboarding ---
+  { question:"Before working on equipment, lockout/tagout (LOTO) is used to…",
+    choices:["De-energize the equipment and verify zero energy","Speed up the job","Label spare parts"],
+    answer:"De-energize the equipment and verify zero energy",
+    why:"Lock it out, tag it, and TEST for zero energy before any work begins.",
+    difficulty:"easy", skin:"onboarding", category:"LOTO" },
+  { question:"Temporary power for tools on a construction site must be protected by…",
+    choices:["GFCI","A bigger breaker","Duct tape on the cord"], answer:"GFCI",
+    why:"GFCI protection is required on all temporary site power — it protects people.",
+    difficulty:"easy", skin:"onboarding", category:"Site power" },
+  { question:"OSHA's 'Focus Four' construction hazards are falls, electrocution, caught-in/between, and…",
+    choices:["Struck-by","Sunburn","Noise"], answer:"Struck-by",
+    why:"The Focus Four cause most construction fatalities — struck-by includes vehicles and loads.",
+    difficulty:"medium", skin:"onboarding", category:"Focus Four" },
+  { question:"Guardrails, hole covers, and personal fall arrest systems are controls for…",
+    choices:["Falls from height","Electrical shock","Fire"], answer:"Falls from height",
+    why:"Falls are the leading cause of construction fatalities — protect every edge and opening.",
+    difficulty:"easy", skin:"onboarding", category:"Falls" },
+  { question:"When a crew member sees an unsafe condition, they should…",
+    choices:["Stop work and report it","Finish the task first","Wait for the weekly meeting"],
+    answer:"Stop work and report it",
+    why:"Everyone has stop-work authority. Use it — no task is worth an injury.",
+    difficulty:"easy", skin:"onboarding", category:"Safety culture" },
+  { question:"In the hierarchy of controls, PPE is…",
+    choices:["The last line of defense","The first thing to try","A substitute for training"],
+    answer:"The last line of defense",
+    why:"Eliminate, substitute, engineer, and administrate first — PPE catches what remains.",
+    difficulty:"medium", skin:"onboarding", category:"PPE" },
+  { question:"A fire watch during hot work (welding / cutting) must continue…",
+    choices:["During the work and for a period after it ends","Only while sparks are visible","Until the welder leaves"],
+    answer:"During the work and for a period after it ends",
+    why:"Smoldering material can ignite after the job — keep the fire watch after hot work ends.",
+    difficulty:"medium", skin:"onboarding", category:"Hot work" },
+  { question:"Cords, debris, and spills on walkways are best controlled by…",
+    choices:["Good housekeeping","Walking faster","Warning shouts"], answer:"Good housekeeping",
+    why:"A clean site is a safe site — housekeeping prevents most slips and trips.",
+    difficulty:"easy", skin:"onboarding", category:"Housekeeping" },
+  { question:"A spotter is required when…",
+    choices:["Equipment is backing or lifting with an obstructed view","The radio is broken","It rains"],
+    answer:"Equipment is backing or lifting with an obstructed view",
+    why:"A dedicated spotter is the control for blind movement and suspended loads.",
+    difficulty:"medium", skin:"onboarding", category:"Struck-by" },
+  { question:"What does a toolbox talk do?",
+    choices:["Briefs the crew on the day's tasks and hazards before work","Repairs tools","Replaces PPE"],
+    answer:"Briefs the crew on the day's tasks and hazards before work",
+    why:"A short daily briefing aligns the crew on hazards and controls before work starts.",
+    difficulty:"easy", skin:"onboarding", category:"Safety culture" },
+  // --- both skins ---
+  { question:"A hair dryer falls into a sink of water — which device prevents electrocution?",
+    choices:["GFCI","AFCI","SPD"], answer:"GFCI",
+    why:"Ground-fault protection at wet locations is exactly this scenario.",
+    difficulty:"easy", skin:"both", category:"Grounding" },
+  { question:"A damaged extension cord is arcing. The right protection is…",
+    choices:["AFCI — and remove the cord from service","SPD","A bigger fuse"],
+    answer:"AFCI — and remove the cord from service",
+    why:"AFCIs detect arcing; the damaged cord itself must also be tagged out of service.",
+    difficulty:"medium", skin:"both", category:"Arc protection" },
+  { question:"Lightning strikes nearby and a voltage spike hits the building. Which device absorbs it?",
+    choices:["SPD","GFCI","Fuse"], answer:"SPD",
+    why:"Surge protective devices clamp transient overvoltage from lightning and switching.",
+    difficulty:"easy", skin:"both", category:"Surge" },
+  { question:"A breaker keeps tripping. The correct response is…",
+    choices:["Find and fix the cause — never fit a larger breaker","Replace it with a larger breaker","Hold it closed"],
+    answer:"Find and fix the cause — never fit a larger breaker",
+    why:"A tripping breaker is doing its job. Upsizing it removes the protection.",
+    difficulty:"medium", skin:"both", category:"Sizing" },
+  { question:"Grounding and bonding matter because they…",
+    choices:["Give fault current a low-impedance path so devices can clear the fault","Make wires cheaper","Reduce the power bill"],
+    answer:"Give fault current a low-impedance path so devices can clear the fault",
+    why:"Without an effective ground path, protective devices may never see the fault.",
+    difficulty:"hard", skin:"both", category:"Grounding" },
+  // --- theory (batch 2) ---
+  { question:"A GFCI trips when ground-leakage current reaches approximately…",
+    choices:["4-6 mA","15 A","100 mA","1 A"], answer:"4-6 mA",
+    why:"People-protection GFCIs trip at 4-6 mA — far below the level that stops a heart.",
+    difficulty:"medium", skin:"theory", category:"Grounding" },
+  { question:"In the US, the equipment grounding conductor is identified by…",
+    choices:["Green insulation or bare copper","White insulation","Red insulation"], answer:"Green insulation or bare copper",
+    why:"Green or bare = grounding; white or gray = grounded (neutral).",
+    difficulty:"easy", skin:"theory", category:"Grounding" },
+  { question:"The grounded (neutral) conductor is normally colored…",
+    choices:["White or gray","Green","Black"], answer:"White or gray",
+    why:"White or gray identifies the grounded conductor; never reuse it as a hot without re-identification.",
+    difficulty:"easy", skin:"theory", category:"Grounding" },
+  { question:"The standard breaker rating for a 12 AWG copper branch circuit is…",
+    choices:["20 A","15 A","30 A","40 A"], answer:"20 A",
+    why:"12 AWG copper is protected at 20 A; 14 AWG at 15 A; 10 AWG at 30 A.",
+    difficulty:"medium", skin:"theory", category:"Sizing" },
+  { question:"The standard breaker rating for a 10 AWG copper branch circuit is…",
+    choices:["30 A","15 A","20 A","50 A"], answer:"30 A",
+    why:"10 AWG copper is protected at 30 A under the small-conductor rule.",
+    difficulty:"hard", skin:"theory", category:"Sizing" },
+  { question:"A circuit serving a continuous load must be sized at…",
+    choices:["125% of the continuous load","100% of the load","80% of the load"], answer:"125% of the continuous load",
+    why:"Loads running 3+ hours are sized at 125% so conductors and breakers don't run hot.",
+    difficulty:"hard", skin:"theory", category:"Sizing" },
+  { question:"AFCI protection is primarily required in…",
+    choices:["Dwelling bedrooms and living areas","Outdoor receptacles","Industrial switchgear"], answer:"Dwelling bedrooms and living areas",
+    why:"Arc faults in bedroom and living-area wiring are a leading cause of home electrical fires.",
+    difficulty:"medium", skin:"theory", category:"Arc protection" },
+  { question:"Which location requires GFCI-protected receptacles?",
+    choices:["Bathrooms","Bedroom closets","Hallway ceilings"], answer:"Bathrooms",
+    why:"Water plus receptacles = GFCI territory: bathrooms, kitchens, garages, outdoors.",
+    difficulty:"easy", skin:"theory", category:"Grounding" },
+  { question:"For best performance, an SPD should be installed…",
+    choices:["Close to the equipment it protects, with short leads","At the far end of the branch circuit","Anywhere — location doesn't matter"],
+    answer:"Close to the equipment it protects, with short leads",
+    why:"Every inch of lead length adds impedance and raises the let-through voltage.",
+    difficulty:"medium", skin:"theory", category:"Surge" },
+  { question:"A breaker's interrupting rating (AIC) is…",
+    choices:["The maximum fault current it can safely interrupt","Its normal load rating","The number of times it can trip"],
+    answer:"The maximum fault current it can safely interrupt",
+    why:"A breaker facing more fault current than its AIC can fail violently instead of clearing.",
+    difficulty:"hard", skin:"theory", category:"Overcurrent" },
+  { question:"A breaker's inverse-time characteristic means…",
+    choices:["Higher overcurrent trips it faster","It trips at fixed time regardless of current","It only trips at night"],
+    answer:"Higher overcurrent trips it faster",
+    why:"Small overloads trip in minutes; heavy faults trip in a fraction of a second.",
+    difficulty:"medium", skin:"theory", category:"Overcurrent" },
+  { question:"A trip curve (time-current curve) shows…",
+    choices:["How long a device takes to open at each current level","The cost of the breaker","Wire color assignments"],
+    answer:"How long a device takes to open at each current level",
+    why:"Overlaying trip curves is how engineers verify selective coordination.",
+    difficulty:"medium", skin:"theory", category:"Coordination" },
+  { question:"If a branch-circuit fault trips the building main instead of the branch breaker, the system is…",
+    choices:["Poorly coordinated","Well coordinated","Working as intended"], answer:"Poorly coordinated",
+    why:"Coordination failure blacks out the whole building for a single branch fault.",
+    difficulty:"hard", skin:"theory", category:"Coordination" },
+  // --- onboarding (batch 2) ---
+  { question:"The minimum clearance from overhead power lines up to 50 kV is…",
+    choices:["10 feet","3 feet","1 foot"], answer:"10 feet",
+    why:"Keep equipment, ladders, and materials at least 10 ft from lines — treat every line as live.",
+    difficulty:"medium", skin:"onboarding", category:"Site power" },
+  { question:"Extension cords used on site must be…",
+    choices:["Heavy-duty, three-wire, and inspected before use","Any household cord","Repaired with tape as needed"],
+    answer:"Heavy-duty, three-wire, and inspected before use",
+    why:"Hard-service cords with a ground, checked each use — damaged cords come out of service.",
+    difficulty:"easy", skin:"onboarding", category:"Site power" },
+  { question:"Who may remove a lockout lock?",
+    choices:["Only the person who applied it","Any supervisor","Whoever finishes last"], answer:"Only the person who applied it",
+    why:"One lock, one key, one person — that rule is what makes LOTO trustworthy.",
+    difficulty:"medium", skin:"onboarding", category:"LOTO" },
+  { question:"Caught-in/between hazards include…",
+    choices:["Trench cave-ins and equipment pinch points","Sunburn and dehydration","Paperwork errors"],
+    answer:"Trench cave-ins and equipment pinch points",
+    why:"Caught-in/between is one of the Focus Four — soil, machinery, and fixed objects.",
+    difficulty:"medium", skin:"onboarding", category:"Focus Four" },
+  { question:"A ladder's side rails must extend above the landing surface by at least…",
+    choices:["3 feet","6 inches","There is no requirement"], answer:"3 feet",
+    why:"The 3-ft extension gives you a handhold while stepping on and off.",
+    difficulty:"medium", skin:"onboarding", category:"Falls" },
+  { question:"A personal fall arrest system consists of…",
+    choices:["Anchor, full-body harness, and connector","A rope tied to a rail","A hard hat and boots"],
+    answer:"Anchor, full-body harness, and connector",
+    why:"The ABCs of fall arrest: Anchorage, Body harness, Connector — all three, every time.",
+    difficulty:"medium", skin:"onboarding", category:"Falls" },
+  { question:"OSHA's construction noise limit before hearing protection is required is…",
+    choices:["90 dBA over an 8-hour shift","120 dBA at any time only","There is no limit"],
+    answer:"90 dBA over an 8-hour shift",
+    why:"At 90 dBA time-weighted average, protection is required — if you must shout at arm's length, it's loud enough.",
+    difficulty:"hard", skin:"onboarding", category:"PPE" },
+  { question:"Safety glasses with side shields are required when…",
+    choices:["Grinding, cutting, or any flying-particle work","Reading drawings","Driving to the site"],
+    answer:"Grinding, cutting, or any flying-particle work",
+    why:"Eye injuries are common and permanent — side shields stop particles coming in at an angle.",
+    difficulty:"easy", skin:"onboarding", category:"PPE" },
+  { question:"Before hot work begins, you must…",
+    choices:["Get a hot work permit and clear combustibles from the area","Just start welding carefully","Open a window"],
+    answer:"Get a hot work permit and clear combustibles from the area",
+    why:"Permit plus a 35-ft combustible-free zone (or covers) — sparks travel farther than you think.",
+    difficulty:"medium", skin:"onboarding", category:"Hot work" },
+  { question:"A near-miss on site should be…",
+    choices:["Reported and investigated like an incident","Forgotten if nobody got hurt","Mentioned at the holiday party"],
+    answer:"Reported and investigated like an incident",
+    why:"A near-miss is a free warning — the next one may not miss.",
+    difficulty:"easy", skin:"onboarding", category:"Safety culture" },
+  // --- both skins (batch 2) ---
+  { question:"You find a power tool with a cracked casing and exposed wiring. You should…",
+    choices:["Tag it out of service and report it","Use it gently","Wrap the crack in tape"],
+    answer:"Tag it out of service and report it",
+    why:"Damaged tools leave service immediately — tag them so nobody else picks them up.",
+    difficulty:"easy", skin:"both", category:"Safety culture" },
+  { question:"Water is pooling on the floor near an energized panel. The right response is…",
+    choices:["Keep people clear, report it, and have the area de-energized before cleanup","Mop it up quickly","Step around it and keep working"],
+    answer:"Keep people clear, report it, and have the area de-energized before cleanup",
+    why:"Water plus energized equipment is a shock path — control the area first, then fix the cause.",
+    difficulty:"medium", skin:"both", category:"Site power" },
+];
+
+/* ================= QUESTION PIPELINE =========================
+   Pure functions: parse -> validate -> bank. No Phaser here.   */
+const QP = (() => {
+  const DIFFS = ["easy","medium","hard"];
+  const SKINS = ["theory","onboarding","both"];
+  const LS_KEY = "griddef.questions.v1";
+  const norm = s => String(s == null ? "" : s).trim().toLowerCase().replace(/\s+/g, " ");
+
+  function stripBOM(t){ return t.charCodeAt(0) === 0xFEFF ? t.slice(1) : t; }
+
+  // Quote-aware CSV parser: handles "", commas in quotes, CRLF.
+  function parseCSV(text){
+    text = stripBOM(text);
+    const rows = []; let field = "", row = [], inQ = false;
+    for (let i = 0; i < text.length; i++){
+      const c = text[i];
+      if (inQ){
+        if (c === '"'){
+          if (text[i+1] === '"'){ field += '"'; i++; }
+          else inQ = false;
+        } else field += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ","){ row.push(field); field = ""; }
+      else if (c === "\n" || c === "\r"){
+        if (c === "\r" && text[i+1] === "\n") i++;
+        row.push(field); field = "";
+        rows.push(row); row = [];
+      } else field += c;
+    }
+    if (field !== "" || row.length){ row.push(field); rows.push(row); }
+    // drop fully-empty trailing rows
+    return rows.filter(r => r.some(f => f.trim() !== ""));
+  }
+
+  // CSV rows -> raw objects keyed by lowercased header (order-independent)
+  function csvToObjects(text){
+    const rows = parseCSV(text);
+    if (rows.length < 2) throw new Error("CSV needs a header row plus at least one question row.");
+    const headers = rows[0].map(h => norm(h));
+    if (!headers.includes("question")) throw new Error("CSV header row must include a 'question' column.");
+    return rows.slice(1).map(r => {
+      const o = {};
+      headers.forEach((h, i) => { if (h) o[h] = r[i] !== undefined ? r[i] : ""; });
+      return o;
+    });
+  }
+
+  function jsonToObjects(text){
+    let data = JSON.parse(stripBOM(text));
+    if (data && !Array.isArray(data) && Array.isArray(data.questions)) data = data.questions;
+    if (!Array.isArray(data)) throw new Error("JSON must be an array of questions or { \"questions\": [...] }.");
+    return data;
+  }
+
+  // One raw object -> validated question or {skip:reason}
+  function validateRow(raw, idx){
+    if (raw == null || typeof raw !== "object") return { skip:"not an object" };
+    const q = String(raw.question == null ? "" : raw.question).trim();
+    if (!q) return { skip:"empty question" };
+    let choices = raw.choices;
+    if (typeof choices === "string") choices = choices.split("|");
+    if (!Array.isArray(choices)) return { skip:"choices missing" };
+    choices = choices.map(c => String(c == null ? "" : c).trim()).filter(c => c !== "");
+    if (choices.length < 2) return { skip:"fewer than 2 choices" };
+    if (choices.length > 6) return { skip:"more than 6 choices" };
+    if (new Set(choices.map(norm)).size !== choices.length) return { skip:"duplicate choices" };
+    const ansRaw = String(raw.answer == null ? "" : raw.answer);
+    const ai = choices.findIndex(c => norm(c) === norm(ansRaw));
+    if (norm(ansRaw) === "") return { skip:"answer missing" };
+    if (ai < 0) return { skip:`answer "${ansRaw.trim()}" matches no choice` };
+    // optional enums: blank -> default; explicitly wrong -> skip (typos surface)
+    const dRaw = norm(raw.difficulty), sRaw = norm(raw.skin);
+    let difficulty = "medium", diffExplicit = false;
+    if (dRaw){ if (!DIFFS.includes(dRaw)) return { skip:`invalid difficulty "${String(raw.difficulty).trim()}"` };
+               difficulty = dRaw; diffExplicit = true; }
+    let skin = "both";
+    if (sRaw){ if (!SKINS.includes(sRaw)) return { skip:`invalid skin "${String(raw.skin).trim()}"` };
+               skin = sRaw; }
+    return { q:{
+      question:q, choices, answer:choices[ai], answerIndex:ai,
+      why:String(raw.why == null ? "" : raw.why).trim(),
+      difficulty, diffExplicit, skin,
+      category:String(raw.category == null ? "" : raw.category).trim(),
+      id:String(raw.id == null ? "" : raw.id).trim() || ("q" + (idx + 1)),
+    }};
+  }
+
+  // Full file text -> { ok, questions, skipped[{row,reason}], error }
+  function parseBank(text, filename){
+    const isJson = /\.json$/i.test(filename || "") ||
+                   /^[\s﻿]*[\[{]/.test(text);
+    let raws;
+    try { raws = isJson ? jsonToObjects(text) : csvToObjects(text); }
+    catch (e){ return { ok:false, error:(isJson ? "JSON" : "CSV") + " parse failed: " + e.message, questions:[], skipped:[] }; }
+    const questions = [], skipped = [];
+    raws.forEach((raw, i) => {
+      const res = validateRow(raw, i);
+      if (res.skip) skipped.push({ row: i + 1, reason: res.skip });
+      else questions.push(res.q);
+    });
+    return { ok:true, questions, skipped };
+  }
+
+  const MIN_BANK = 5; // below this the bundled sample is kept
+
+  function loadStoredBank(){
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return null;
+      const b = JSON.parse(raw);
+      if (b && Array.isArray(b.questions) && b.questions.length >= MIN_BANK) return b;
+    } catch (e){ /* storage unavailable or corrupt -> sample */ }
+    return null;
+  }
+  function storeBank(bank){
+    try { localStorage.setItem(LS_KEY, JSON.stringify(bank)); return true; }
+    catch (e){ return false; }
+  }
+  function clearStoredBank(){
+    try { localStorage.removeItem(LS_KEY); } catch (e){}
+  }
+
+  return { parseCSV, parseBank, validateRow, norm, MIN_BANK,
+           loadStoredBank, storeBank, clearStoredBank, LS_KEY };
+})();
+
+/* Active bank state (module-level, read by scenes) */
+const BankState = {
+  questions: SAMPLE_QUESTIONS.map((q, i) => QP.validateRow(q, i).q), // sample is pre-validated
+  source: "Bundled sample",
+  custom: false,
+  persisted: true,
+  init(){
+    const stored = QP.loadStoredBank();
+    if (stored){ this.questions = stored.questions; this.source = stored.source || "Uploaded file"; this.custom = true; this.persisted = true; }
+  },
+  setCustom(questions, source){
+    this.questions = questions; this.source = source; this.custom = true;
+    this.persisted = QP.storeBank({ questions, source, count: questions.length, ts: Date.now() });
+  },
+  resetToSample(){
+    this.questions = SAMPLE_QUESTIONS.map((q, i) => QP.validateRow(q, i).q);
+    this.source = "Bundled sample"; this.custom = false;
+    QP.clearStoredBank();
+  },
+};
+
+/* Stable identity for mastery tracking: hash of the normalized
+   prompt, so progress survives re-uploads and id changes.      */
+function qKey(q){
+  const s = QP.norm(q.question);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return "m" + h.toString(36);
+}
+
+/* ================= PLAYER PROFILE (persistent) ===============
+   XP, level, rank, prefs, question mastery, and lifetime stats
+   survive across games in localStorage — separate from the run
+   save and the question bank. Pure data + math, no Phaser.     */
+const Profile = (() => {
+  const KEY = "griddef.profile.v1";
+  const blank = () => ({
+    xp: 0, level: 1, totalXp: 0,
+    prefs: { skin: null, mapId: null, muted: false },
+    mastery: {}, // qKey -> { streak, need, mastered, asked, misses }
+    life: { games:0, wins:0, bestScore:0, bestWave:0, cleared:0, leaked:0,
+            qAsked:0, qCorrect:0, goldEarned:0, answers:{}, maps:{} },
+  });
+  let p = blank();
+  try {
+    const j = JSON.parse(localStorage.getItem(KEY) || "null");
+    if (j && j.life){
+      p = blank();
+      p.xp = j.xp || 0; p.level = j.level || 1; p.totalXp = j.totalXp || 0;
+      Object.assign(p.prefs, j.prefs || {});
+      Object.assign(p.mastery, j.mastery || {});
+      Object.assign(p.life, j.life || {});
+    }
+  } catch (e){ /* storage unavailable or corrupt -> fresh profile */ }
+  function save(){ try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e){} }
+  function xpToNext(level){ return PROG.xpPerLevelBase + PROG.xpPerLevelGrowth * (level - 1); }
+  function rank(level){
+    let r = PROG.ranks[0][1];
+    PROG.ranks.forEach(([lv, name]) => { if (level >= lv) r = name; });
+    return r;
+  }
+  // returns the list of levels reached (empty if no level-up)
+  function addXP(n){
+    if (!(n > 0)) return [];
+    p.xp += n; p.totalXp += n;
+    const ups = [];
+    while (p.xp >= xpToNext(p.level)){ p.xp -= xpToNext(p.level); p.level++; ups.push(p.level); }
+    save();
+    return ups;
+  }
+  function recordAnswer(category, correct){
+    p.life.qAsked++;
+    if (correct) p.life.qCorrect++;
+    const cat = String(category || "").trim() || "General";
+    const a = p.life.answers[cat] || (p.life.answers[cat] = { asked:0, correct:0 });
+    a.asked++; if (correct) a.correct++;
+    save();
+  }
+  function recordGame(g){ // { won, wave, score, stats, mapId }
+    const L = p.life;
+    L.games++; if (g.won) L.wins++;
+    const rec = { newBestScore: g.score > L.bestScore && L.games > 1,
+                  newBestWave: g.wave > L.bestWave && L.games > 1 };
+    L.bestScore = Math.max(L.bestScore, g.score);
+    L.bestWave = Math.max(L.bestWave, g.wave);
+    L.cleared += g.stats.cleared; L.leaked += g.stats.leaked;
+    L.goldEarned += g.stats.goldEarned;
+    const m = L.maps[g.mapId] || (L.maps[g.mapId] = { games:0, wins:0, bestWave:0, bestScore:0 });
+    m.games++; if (g.won) m.wins++;
+    m.bestWave = Math.max(m.bestWave, g.wave); m.bestScore = Math.max(m.bestScore, g.score);
+    save();
+    return rec;
+  }
+  function setPref(k, v){ p.prefs[k] = v; save(); }
+  /* Quizlet-style mastery: `need` correct in a row masters a question;
+     a miss resets the streak, raises the requirement (capped), and
+     un-masters it. */
+  function getMastery(key){
+    return p.mastery[key] || { streak:0, need:PROG.masteryNeed, mastered:false, asked:0, misses:0 };
+  }
+  function recordMastery(key, correct){
+    const m = p.mastery[key] ||
+      (p.mastery[key] = { streak:0, need:PROG.masteryNeed, mastered:false, asked:0, misses:0 });
+    m.asked++;
+    let justMastered = false;
+    if (correct){
+      m.streak++;
+      if (!m.mastered && m.streak >= m.need){ m.mastered = true; justMastered = true; }
+    } else {
+      m.misses++; m.streak = 0; m.mastered = false;
+      m.need = Math.min(m.need + 1, PROG.masteryNeedMax);
+    }
+    save();
+    return { streak:m.streak, need:m.need, mastered:m.mastered, justMastered };
+  }
+  function masteredCount(questions){
+    return questions.filter(q => getMastery(qKey(q)).mastered).length;
+  }
+  return { get: () => p, save, addXP, xpToNext, rank, recordAnswer, recordGame,
+           setPref, getMastery, recordMastery, masteredCount, KEY };
+})();
+
+/* ================= RUN SAVE (continue a game) ================
+   One save slot. Written at safe checkpoints (start of each
+   build phase / between waves); cleared on win or loss.        */
+const RunSave = (() => {
+  const KEY = "griddef.save.v1";
+  function save(s){ try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e){} }
+  function load(){
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (s && s.wave >= 1 && Array.isArray(s.towers) && s.mapId && s.skin) return s;
+    } catch (e){}
+    return null;
+  }
+  function clear(){ try { localStorage.removeItem(KEY); } catch (e){} }
+  return { save, load, clear, KEY };
+})();
+
+/* Question pool: skin filter + difficulty routing + mastery-aware
+   draws. A question answered correctly this game is not re-asked;
+   a missed question is put back a couple of draws away so it gets
+   drilled. Refills prefer unmastered questions; mastered ones only
+   return when nothing else is left. */
+class QuestionPool {
+  constructor(questions, skin){
+    this.all = questions.filter(q => q.skin === "both" || q.skin === skin);
+    if (!this.all.length) this.all = questions.slice(); // degenerate bank: use everything
+    this.hasDiff = this.all.some(q => q.diffExplicit);
+    this.deck = [];
+    this.lastId = null;
+    this.correctThisGame = new Set(); // ids answered correctly this game
+  }
+  refill(){
+    const unmastered = this.all.filter(q => !Profile.getMastery(qKey(q)).mastered);
+    const fresh = unmastered.filter(q => !this.correctThisGame.has(q.id));
+    const pick = fresh.length ? fresh : (unmastered.length ? unmastered : this.all);
+    this.deck = Phaser.Utils.Array.Shuffle(pick.slice());
+    // never repeat back-to-back across a reshuffle
+    if (this.deck.length > 1 && this.deck[this.deck.length - 1].id === this.lastId){
+      const t = this.deck.pop(); this.deck.unshift(t);
+    }
+  }
+  noteResult(q, correct){
+    if (correct){ this.correctThisGame.add(q.id); return; }
+    // missed: re-ask it soon (2 draws away), but never immediately next
+    this.correctThisGame.delete(q.id);
+    if (!this.deck.some(d => d.id === q.id))
+      this.deck.splice(Math.max(0, this.deck.length - 2), 0, q);
+  }
+  draw(prefer){ // prefer: array of difficulties, or null
+    if (!this.deck.length) this.refill();
+    // never back-to-back unless it is the only question available
+    const fresh = i => this.deck.length === 1 || this.deck[i].id !== this.lastId;
+    let idx = -1;
+    if (this.hasDiff && prefer){
+      for (let i = this.deck.length - 1; i >= 0; i--){
+        if (prefer.includes(this.deck[i].difficulty) && fresh(i)){ idx = i; break; }
+      }
+    }
+    if (idx < 0){
+      idx = this.deck.length - 1;
+      if (!fresh(idx)) idx--;
+    }
+    const q = this.deck.splice(idx, 1)[0];
+    this.lastId = q.id;
+    return q;
+  }
+}
+/* ================= SHARED HELPERS ============================ */
+const W = 960, H = 540;
+/* Crispness factor: the canvas backing store is W*K x H*K (matched to the
+   display's physical pixels), while all game code keeps 960x540 coordinates
+   via a per-scene camera zoom. Text + generated textures rasterize at K. */
+const K = Math.min(4, Math.max(2, Math.ceil(
+  ((window.screen && window.screen.width) || W) * (window.devicePixelRatio || 1) / W)));
+function crispCam(scene){
+  scene.cameras.main.setZoom(K);
+  scene.cameras.main.centerOn(W / 2, H / 2);
+}
+const REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+/* Education-psychology palette: calm indigo base (focus/trust), progress
+   teal as the working accent, green = growth/mastery, amber = achievement,
+   violet = XP/wisdom, soft coral (never harsh red) for mistakes. */
+const PAL = { bg:0x111C33, grid:0x1C2C4F, cyan:0x2DD4BF, green:0x4ADE80, amber:0xFBBF24,
+              red:0xF87171, violet:0xA78BFA, text:"#F1F5F9", muted:"#93A5C0",
+              orange:0xFB923C, hivis:0xA3E635, panel:0x172642, panelLine:0x2B3F66 };
+/* Humanist sans for prose (readability); mono reserved for technical
+   readouts — glyphs, amp ratings — so they read like instrument labels. */
+const FONT = '"Segoe UI","Trebuchet MS",Verdana,sans-serif';
+const FONT_MONO = '"Cascadia Code","Consolas","JetBrains Mono",monospace';
+const T = (s, x, y, txt, size, color, extra) => s.add.text(x, y, txt, Object.assign({
+  fontFamily: FONT, fontSize: size + "px", color: color || PAL.text, resolution: K }, extra || {}));
+
+function skinFromURL(){
+  try { const s = new URLSearchParams(location.search).get("skin");
+        return s === "onboarding" || s === "theory" ? s : null; }
+  catch (e){ return null; }
+}
+function mapFromURL(){
+  try { return new URLSearchParams(location.search).get("map"); } catch (e){ return null; }
+}
+const G = { // cross-scene globals; skin/map/mode/mute fall back to saved prefs
+  skin: skinFromURL() || Profile.get().prefs.skin || "theory",
+  muted: !!Profile.get().prefs.muted,
+  mapId: mapFromURL() || Profile.get().prefs.mapId || "bus",
+  mapOverride: !!mapFromURL(), // ?map=<id> previews any layout, ignoring level locks
+  mode: Profile.get().prefs.mode || "campaign", // campaign (15 waves) | endless
+};
+const C = () => CONTENT[G.skin];
+
+/* Tiny WebAudio beeps (no files). Created lazily on first gesture. */
+const SFX = (() => {
+  let ctx = null;
+  function ready(){
+    if (G.muted) return null;
+    try { if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ctx.state === "suspended") ctx.resume(); return ctx; }
+    catch (e){ return null; }
+  }
+  function tone(freq, dur, type, vol, slide){
+    const c = ready(); if (!c) return;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = type || "square"; o.frequency.value = freq;
+    if (slide) o.frequency.linearRampToValueAtTime(slide, c.currentTime + dur);
+    g.gain.value = vol || 0.04;
+    g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
+    o.connect(g); g.connect(c.destination);
+    o.start(); o.stop(c.currentTime + dur);
+  }
+  return {
+    correct(){ tone(660, .12, "square", .05, 990); },
+    wrong(){ tone(180, .25, "sawtooth", .05, 120); },
+    clear(){ tone(880, .06, "square", .03); },
+    leak(){ tone(240, .3, "triangle", .06, 110); },
+    place(){ tone(440, .05, "square", .04); },
+    coin(){ tone(1200, .07, "square", .035, 1600); },
+    ui(){ tone(520, .04, "square", .025); },
+  };
+})();
+
+/* Rounded-rect button drawn in-canvas; >=44px hit target for touch. */
+function makeButton(scene, x, y, w, h, label, size, onClick, opts){
+  opts = opts || {};
+  const g = scene.add.graphics();
+  const draw = (fill, line) => {
+    g.clear();
+    g.fillStyle(fill, opts.alpha != null ? opts.alpha : 1).fillRoundedRect(-w/2, -h/2, w, h, 10);
+    g.lineStyle(2, line, 1).strokeRoundedRect(-w/2, -h/2, w, h, 10);
+  };
+  const base = opts.fill != null ? opts.fill : PAL.panel;
+  const line = opts.line != null ? opts.line : PAL.cyan;
+  draw(base, line);
+  const t = T(scene, 0, 0, label, size, opts.color || PAL.text, opts.labelStyle).setOrigin(0.5);
+  const cont = scene.add.container(x, y, [g, t]);
+  cont.setSize(Math.max(w, 44), Math.max(h, 44));
+  cont.setInteractive({ useHandCursor: true });
+  cont.on("pointerover", () => { if (!cont.disabled) draw(0x22345C, line); });
+  cont.on("pointerout",  () => { if (!cont.disabled) draw(base, line); });
+  cont.on("pointerup",   () => { if (!cont.disabled){ SFX.ui(); onClick(); } });
+  cont.label = t; cont.redraw = draw; cont.baseFill = base; cont.baseLine = line;
+  cont.setDisabled = d => { cont.disabled = d; g.alpha = t.alpha = d ? 0.4 : 1; draw(base, line); };
+  return cont;
+}
+
+/* Wave math — pure, testable */
+function isBossWave(n){ return n % 5 === 0; }
+function waveEnemyTypes(skin, n){
+  const c = CONTENT[skin];
+  return c.enemies.filter(e => (c.intro[e.id] || 1) <= n).map(e => e.id);
+}
+function waveCount(n){
+  const base = Math.round(BAL.waveBaseCount + BAL.waveCountGrowth * (n - 1));
+  return isBossWave(n) ? Math.round(base * BAL.bossCountMult) : base;
+}
+function waveHpMult(n){ return 1 + BAL.hpGrowth * (n - 1); }
+function waveSpeedMult(n){ return 1 + BAL.speedGrowth * (n - 1); }
+/* Overload amp values escalate with the wave (theory skin) */
+function overloadAmps(n){ return n < 5 ? 18 : n < 10 ? 28 : 45; }
+const BREAKER_RATINGS = [15, 20, 30];
+
+/* ================= UPLOAD BRIDGE (DOM <-> Phaser) ============ */
+const Upload = {
+  listeners: [],
+  lastSummary: null, // shown when the Menu next opens (file dropped mid-game)
+  onBank(fn){ this.listeners.push(fn); },
+  emit(result, filename){
+    if (this.listeners.length){ this.listeners.forEach(fn => fn(result, filename)); return; }
+    // no scene is listening (dropped during Play/GameOver): apply centrally + confirm via DOM
+    let text, color;
+    if (!result.ok){ text = "! " + filename + ": " + result.error; color = "#F87171"; }
+    else if (result.questions.length < QP.MIN_BANK){
+      text = "! " + filename + ": only " + result.questions.length +
+        " valid question(s) — need at least " + QP.MIN_BANK + ". Keeping the current bank.";
+      color = "#FBBF24";
+    } else {
+      BankState.setCustom(result.questions, filename);
+      text = "✔ Loaded " + result.questions.length + " questions from " + filename +
+        (result.skipped.length ? " · skipped " + result.skipped.length : "") +
+        " — takes effect next game";
+      color = "#4ADE80";
+    }
+    this.lastSummary = { text, color };
+    const el = document.getElementById("dropmsg");
+    el.textContent = text;
+    el.style.borderColor = color;
+    el.classList.add("show");
+    clearTimeout(this._msgT);
+    this._msgT = setTimeout(() => el.classList.remove("show"), 4500);
+  },
+  handleFile(file){
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => Upload.emit(QP.parseBank(String(reader.result), file.name), file.name);
+    reader.onerror = () => Upload.emit({ ok:false, error:"Could not read the file.", questions:[], skipped:[] }, file.name);
+    reader.readAsText(file);
+  },
+};
+(() => {
+  const input = document.getElementById("qfile");
+  input.addEventListener("change", () => { Upload.handleFile(input.files[0]); input.value = ""; });
+  const dz = document.getElementById("dropzone");
+  let depth = 0;
+  document.addEventListener("dragenter", e => { e.preventDefault(); depth++; dz.classList.add("show"); });
+  document.addEventListener("dragover",  e => { e.preventDefault(); });
+  document.addEventListener("dragleave", e => { e.preventDefault(); depth = Math.max(0, depth - 1); if (!depth) dz.classList.remove("show"); });
+  document.addEventListener("drop", e => {
+    e.preventDefault(); depth = 0; dz.classList.remove("show");
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) Upload.handleFile(e.dataTransfer.files[0]);
+  });
+})();
+function downloadTemplate(){
+  // 6 rows so the unedited template itself passes the 5-question minimum
+  const csv = 'question,choices,answer,why,difficulty,skin,category\n' +
+    '"A device that trips only on current leaking to ground is a…",GFCI|AFCI|SPD|Fuse,GFCI,"GFCI protects people from ground faults",easy,theory,Grounding\n' +
+    '"Temporary power for tools on site must be protected by…",GFCI|A bigger breaker|Duct tape,GFCI,"GFCI on all temporary site power",easy,onboarding,Site power\n' +
+    '"Which device is single-use and must be replaced after it operates?",Fuse|Circuit breaker|GFCI,Fuse,"A fuse blows once; a breaker resets",easy,both,Overcurrent\n' +
+    '"Bedroom branch circuits require…",AFCI|GFCI|SPD,AFCI,"AFCI detects arcing in dwelling circuits",medium,both,Arc protection\n' +
+    '"Which device protects against transient overvoltage from lightning?",SPD|GFCI|AFCI|Fuse,SPD,"An SPD clamps surges; overcurrent devices cannot react to them",medium,theory,Surge\n' +
+    '"A breaker that keeps tripping is best fixed by…",Finding and fixing the cause|A larger breaker|Holding it closed,Finding and fixing the cause,"Never upsize past the conductor rating",hard,both,Sizing\n';
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "questions-template.csv";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+/* ================= SCENES ==================================== */
+class BootScene extends Phaser.Scene {
+  constructor(){ super("Boot"); }
+  create(){ BankState.init(); this.scene.start("Preload"); }
+}
+
+class PreloadScene extends Phaser.Scene {
+  constructor(){ super("Preload"); }
+  create(){
+    // generated textures only — no external assets.
+    // Everything is rasterized at K× and drawn with setScale(1/K) so it is
+    // pixel-perfect under the zoomed camera.
+    const S = K;
+    const P = pts => pts.map(p => ({ x: p.x * S, y: p.y * S }));
+    const g = this.make.graphics({ add: false });
+    // buildable tile
+    g.fillStyle(0x131F3A, 1).fillRect(0, 0, 46*S, 46*S);
+    g.lineStyle(S, PAL.grid, 1).strokeRect(0, 0, 46*S, 46*S);
+    g.generateTexture("tile", 46*S, 46*S); g.clear();
+    // path tile (bright bus)
+    g.fillStyle(0x1C2C4F, 1).fillRect(0, 0, 46*S, 46*S);
+    g.lineStyle(2*S, PAL.cyan, 0.5).strokeRect(S, S, 44*S, 44*S);
+    g.fillStyle(PAL.cyan, 0.12).fillRect(4*S, 4*S, 38*S, 38*S);
+    g.generateTexture("pathTile", 46*S, 46*S); g.clear();
+    // tower base
+    g.fillStyle(0x1D2F52, 1).fillRoundedRect(0, 0, 40*S, 40*S, 8*S);
+    g.lineStyle(2*S, 0x3A5080, 1).strokeRoundedRect(S, S, 38*S, 38*S, 8*S);
+    g.generateTexture("towerBase", 40*S, 40*S); g.clear();
+    // enemy bodies by shape
+    g.fillStyle(0xFFFFFF, 1).fillCircle(14*S, 14*S, 12*S);
+    g.generateTexture("eCircle", 28*S, 28*S); g.clear();
+    g.fillStyle(0xFFFFFF, 1).fillTriangle(14*S, 2*S, 26*S, 24*S, 2*S, 24*S);
+    g.generateTexture("eTri", 28*S, 28*S); g.clear();
+    g.fillStyle(0xFFFFFF, 1).fillPoints(P([{x:14,y:1},{x:27,y:14},{x:14,y:27},{x:1,y:14}]), true);
+    g.generateTexture("eDiamond", 28*S, 28*S); g.clear();
+    g.fillStyle(0xFFFFFF, 1).fillPoints(P([{x:16,y:0},{x:8,y:14},{x:14,y:14},{x:6,y:28},{x:22,y:12},{x:15,y:12}]), true);
+    g.generateTexture("eBolt", 28*S, 28*S); g.clear();
+    // soft dot for fx
+    g.fillStyle(0xFFFFFF, 1).fillCircle(4*S, 4*S, 4*S);
+    g.generateTexture("dot", 8*S, 8*S);
+    g.destroy();
+    this.scene.start("Menu");
+  }
+}
+
+class MenuScene extends Phaser.Scene {
+  constructor(){ super("Menu"); }
+  create(){
+    crispCam(this);
+    this.cameras.main.setBackgroundColor(PAL.bg);
+    this.drawGrid();
+    this.uiRefs = [];
+    this.statObjs = null; // scene instances are reused across restarts
+    this.bankObjs = null;
+    // selected map (respect level locks unless a ?map= override is active)
+    if (!G.mapOverride && mapById(G.mapId).unlock > Profile.get().level) G.mapId = MAPS[0].id;
+    this.mapIdx = Math.max(0, MAPS.findIndex(m => m.id === G.mapId));
+    this.summary = Upload.lastSummary; // surface a bank change made while the Menu was closed
+    Upload.lastSummary = null;
+    this.render();
+    this.bankHandler = (result, filename) => this.onUpload(result, filename);
+    Upload.onBank(this.bankHandler);
+    this.events.once("shutdown", () => {
+      Upload.listeners = Upload.listeners.filter(f => f !== this.bankHandler);
+    });
+  }
+  drawGrid(){
+    const g = this.add.graphics();
+    g.lineStyle(1, PAL.grid, 0.5);
+    for (let x = 0; x <= W; x += 48) g.lineBetween(x, 0, x, H);
+    for (let y = 0; y <= H; y += 48) g.lineBetween(0, y, W, y);
+  }
+  render(){
+    this.uiRefs.forEach(o => o.destroy()); this.uiRefs = [];
+    const c = C();
+    const p = Profile.get();
+    const add = o => { this.uiRefs.push(o); return o; };
+    const saveData = RunSave.load();
+    add(T(this, W/2, 40, c.title, 36, "#2DD4BF", { fontStyle:"bold" }).setOrigin(0.5));
+    add(T(this, W/2, 72, c.subtitle, 14, PAL.muted).setOrigin(0.5));
+    add(T(this, W/2, 106,
+      (G.skin === "theory"
+        ? "Faults travel the bus toward the panel. Place the device that MATCHES each fault — the wrong one does nothing."
+        : "Hazards move through the site toward the crew. Place the control that MATCHES each hazard — the wrong one does nothing.") +
+      "\nAnswer questions before each wave to earn gold · get one right " + PROG.masteryNeed +
+      "× in a row to master it.",
+      12, PAL.text, { align:"center", lineSpacing: 5 }).setOrigin(0.5));
+
+    // selected map (respect level locks unless a ?map= override is active)
+    const unlockedMaps = MAPS.filter(m => m.unlock <= p.level);
+    let map = mapById(G.mapId);
+    if (!G.mapOverride && map.unlock > p.level) map = MAPS[0];
+    G.mapId = map.id;
+
+    // config row + action row (CONTINUE appears when a run save exists)
+    const mkRow = (list, y) => {
+      const gapB = 12, totW = list.reduce((s, d) => s + d.w, 0) + gapB * (list.length - 1);
+      let bx = (W - totW) / 2;
+      list.forEach(d => { add(d.mk(bx + d.w / 2, y)); bx += d.w + gapB; });
+    };
+    mkRow([
+      { w: 170, mk: (x, y) => makeButton(this, x, y, 170, 38, "Skin: " + c.skinLabel, 12, () => {
+          G.skin = G.skin === "theory" ? "onboarding" : "theory";
+          Profile.setPref("skin", G.skin); this.render();
+        }) },
+      { w: 190, mk: (x, y) => makeButton(this, x, y, 190, 38, "Map: " + map.name, 12, () => {
+          const i = unlockedMaps.findIndex(m => m.id === map.id);
+          G.mapId = unlockedMaps[(i + 1) % unlockedMaps.length].id;
+          Profile.setPref("mapId", G.mapId); this.render();
+        }) },
+      { w: 190, mk: (x, y) => makeButton(this, x, y, 190, 38,
+          "Mode: " + (G.mode === "endless" ? "Endless ∞" : "Campaign"), 12, () => {
+          G.mode = G.mode === "endless" ? "campaign" : "endless";
+          Profile.setPref("mode", G.mode); this.render();
+        }) },
+    ], 144);
+    const actions = [
+      { w: 170, mk: (x, y) => makeButton(this, x, y, 170, 42, "▶ START", 15,
+          () => this.scene.start("Play"), { line: PAL.green, color:"#4ADE80" }) },
+    ];
+    if (saveData) actions.push({ w: 240, mk: (x, y) => makeButton(this, x, y, 240, 42,
+      "↻ CONTINUE · wave " + saveData.wave + (saveData.mode === "endless" ? " ∞" : ""), 12, () => {
+        G.skin = saveData.skin; G.mapId = saveData.mapId; G.mode = saveData.mode || "campaign";
+        this.scene.start("Play", { resume: saveData });
+      }, { line: PAL.amber, color:"#FBBF24" }) });
+    mkRow(actions, 188);
+
+    /* left card — question bank */
+    const cardY = 224, cardH = 250, bankX = 20, bankW = 452;
+    const bg = this.add.graphics();
+    bg.fillStyle(PAL.panel, 0.9).fillRoundedRect(bankX, cardY, bankW, cardH, 14);
+    bg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(bankX, cardY, bankW, cardH, 14);
+    add(bg);
+    add(T(this, bankX + 16, cardY + 12, "QUESTION BANK", 13, "#2DD4BF"));
+    const skinCount = BankState.questions.filter(q => q.skin === "both" || q.skin === G.skin).length;
+    const mastered = Profile.masteredCount(BankState.questions);
+    add(T(this, bankX + 16, cardY + 34,
+      BankState.source + " · " + BankState.questions.length + " questions (" + skinCount + " for this skin)\n" +
+      "★ mastered " + mastered + " / " + BankState.questions.length +
+      (BankState.custom ? (BankState.persisted ? " · saved locally" : " · storage unavailable — this session only") : ""),
+      11, PAL.muted, { lineSpacing: 4 }));
+    const bBtnY = cardY + 92;
+    add(makeButton(this, bankX + 86, bBtnY, 136, 38, "Upload file", 12,
+      () => document.getElementById("qfile").click()));
+    add(makeButton(this, bankX + 238, bBtnY, 150, 38, "Reset to sample", 11, () => {
+      BankState.resetToSample();
+      this.summary = { text: "Restored the bundled sample bank (" + BankState.questions.length + " questions).", color: "#4ADE80" };
+      this.render();
+    }));
+    add(makeButton(this, bankX + 380, bBtnY, 120, 38, "CSV template", 10, downloadTemplate, { color: PAL.muted }));
+    add(T(this, bankX + 16, cardY + 120,
+      "Drop a .csv or .json anywhere, or Upload. Columns: question,\n" +
+      "choices (A|B|C), answer (exact text), why, difficulty, skin, category.",
+      10, PAL.muted, { lineSpacing: 4 }));
+    if (this.summary){
+      add(T(this, bankX + 16, cardY + 158, this.summary.text, 10, this.summary.color,
+        { wordWrap: { width: bankW - 32 }, lineSpacing: 3 }));
+    }
+
+    /* right card — operator profile + maps */
+    const px = 488, pw2 = 452;
+    const pg = this.add.graphics();
+    pg.fillStyle(PAL.panel, 0.9).fillRoundedRect(px, cardY, pw2, cardH, 14);
+    pg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(px, cardY, pw2, cardH, 14);
+    add(pg);
+    add(T(this, px + 16, cardY + 12, "OPERATOR PROFILE", 13, "#2DD4BF"));
+    add(makeButton(this, px + pw2 - 70, cardY + 24, 104, 30, "STATS", 11,
+      () => this.showStats(), { color: PAL.muted }));
+    add(T(this, px + 16, cardY + 34, "Lv " + p.level + " · " + Profile.rank(p.level), 15, PAL.text));
+    add(T(this, px + pw2 - 130, cardY + 40, p.xp + " / " + Profile.xpToNext(p.level) + " XP", 10, PAL.muted).setOrigin(1, 0));
+    const xbW = pw2 - 32, xbY = cardY + 60;
+    const xb = this.add.graphics();
+    xb.fillStyle(0x0B1E2D, 1).fillRoundedRect(px + 16, xbY, xbW, 8, 4);
+    const frac = Math.min(1, p.xp / Profile.xpToNext(p.level));
+    if (frac > 0.02) xb.fillStyle(PAL.violet, 1).fillRoundedRect(px + 16, xbY, Math.max(8, xbW * frac), 8, 4);
+    xb.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(px + 16, xbY, xbW, 8, 4);
+    add(xb);
+    const acc = p.life.qAsked ? Math.round(100 * p.life.qCorrect / p.life.qAsked) : 0;
+    add(T(this, px + 16, cardY + 78,
+      p.life.games + " games · " + p.life.wins + " wins · best score " + p.life.bestScore +
+      " · best wave " + p.life.bestWave + " · answers " + acc + "%",
+      10, PAL.muted));
+    add(T(this, px + 16, cardY + 102, "MAPS — unlock by leveling up", 12, "#2DD4BF"));
+    let my = cardY + 124;
+    MAPS.forEach(m2 => {
+      const locked = m2.unlock > p.level;
+      const sel = m2.id === map.id;
+      const ms = p.life.maps[m2.id];
+      const right = locked ? "unlocks Lv " + m2.unlock
+        : ms ? "best W" + ms.bestWave + " · " + ms.wins + " win" + (ms.wins === 1 ? "" : "s") : "unplayed";
+      const row = add(T(this, px + 16, my, (sel ? "▶ " : "· ") + m2.name, 12,
+        locked ? PAL.muted : sel ? "#4ADE80" : PAL.text));
+      add(T(this, px + pw2 - 16, my + 2, right, 10, PAL.muted).setOrigin(1, 0));
+      if (!locked){
+        row.setInteractive({ useHandCursor: true });
+        row.on("pointerup", () => { G.mapId = m2.id; Profile.setPref("mapId", m2.id); SFX.ui(); this.render(); });
+      }
+      my += 22;
+    });
+    add(T(this, px + 16, my + 4,
+      (G.mapOverride && map.unlock > p.level ? "URL preview · " : "") + map.blurb, 9,
+      PAL.muted, { wordWrap: { width: pw2 - 32 } }));
+
+    /* footer */
+    add(T(this, 20, H - 26, "Sound: " + (G.muted ? "off" : "on") + " · tap to toggle", 10, PAL.muted)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerup", () => { G.muted = !G.muted; Profile.setPref("muted", G.muted); this.render(); }));
+    add(T(this, W/2, H - 26, "?skin=onboarding · ?map=<id> open a skin or map directly", 10, PAL.muted).setOrigin(0.5, 0));
+    add(T(this, W - 20, H - 26, "Instructor tools ↗", 10, "#2DD4BF").setOrigin(1, 0)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerup", () => window.open("instructor.html")));
+  }
+  showStats(){
+    if (this.statObjs) return;
+    const p = Profile.get();
+    const objs = [];
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x0D1526, 0.8).setDepth(90)
+      .setInteractive().on("pointerup", () => { objs.forEach(o => o.destroy()); this.statObjs = null; });
+    const pw = 800, ph = 470, x0 = W/2 - pw/2, top = (H - ph) / 2;
+    const g = this.add.graphics().setDepth(91);
+    g.fillStyle(PAL.panel, 0.98).fillRoundedRect(x0, top, pw, ph, 14);
+    g.lineStyle(2, PAL.cyan, 1).strokeRoundedRect(x0, top, pw, ph, 14);
+    g.lineStyle(1, PAL.panelLine, 1).lineBetween(x0 + 400, top + 46, x0 + 400, top + ph - 30);
+    const put = (x, y, txt, size, color, extra) => {
+      const t = T(this, x, y, txt, size, color, extra).setDepth(92); objs.push(t); return t; };
+    objs.push(dim, g);
+    put(W/2, top + 16, "LIFETIME STATS", 14, "#2DD4BF", { fontStyle: "bold" }).setOrigin(0.5);
+    const Lx = x0 + 24;
+    let y = top + 50;
+    const acc = p.life.qAsked ? Math.round(100 * p.life.qCorrect / p.life.qAsked) : 0;
+    const masteredAll = Object.values(p.mastery).filter(m => m.mastered).length;
+    [
+      ["Level", p.level + " · " + Profile.rank(p.level)],
+      ["Total XP", p.totalXp],
+      ["Games", p.life.games + " (" + p.life.wins + " won)"],
+      ["Best score", p.life.bestScore],
+      ["Best wave", p.life.bestWave],
+      ["Answers", p.life.qCorrect + " / " + p.life.qAsked + " (" + acc + "%)"],
+      ["Questions mastered", masteredAll],
+      [C().nouns.enemies + " stopped", p.life.cleared],
+      ["Got through", p.life.leaked],
+      ["Gold earned", p.life.goldEarned + "g"],
+    ].forEach(r => {
+      put(Lx, y, r[0], 11, PAL.muted);
+      put(x0 + 376, y, String(r[1]), 11, PAL.text).setOrigin(1, 0);
+      y += 22;
+    });
+    y += 8;
+    put(Lx, y, "BY MAP", 11, "#2DD4BF"); y += 20;
+    MAPS.forEach(m => {
+      const s = p.life.maps[m.id];
+      put(Lx, y, m.name, 10, PAL.text);
+      put(x0 + 376, y, s ? s.games + " games · " + s.wins + " wins · best W" + s.bestWave
+        : (m.unlock > p.level ? "unlocks Lv " + m.unlock : "unplayed"), 9, PAL.muted).setOrigin(1, 0);
+      y += 18;
+    });
+    const Rx = x0 + 424;
+    let ry = top + 50;
+    put(Rx, ry, "ACCURACY BY CATEGORY", 11, "#2DD4BF"); ry += 20;
+    const cats = Object.entries(p.life.answers).sort((a, b) => b[1].asked - a[1].asked).slice(0, 15);
+    if (!cats.length) put(Rx, ry, "No answers recorded yet — play a game!", 10, PAL.muted);
+    cats.forEach(([cat, a]) => {
+      const pc = Math.round(100 * a.correct / a.asked);
+      put(Rx, ry, cat.length > 26 ? cat.slice(0, 25) + "…" : cat, 10, PAL.text);
+      put(x0 + pw - 24, ry, a.correct + "/" + a.asked + " · " + pc + "%", 10,
+        pc >= 80 ? "#4ADE80" : pc >= 50 ? "#FBBF24" : "#F87171").setOrigin(1, 0);
+      ry += 18;
+    });
+    put(W/2, top + ph - 16, "click anywhere to close", 9, PAL.muted).setOrigin(0.5);
+    this.statObjs = objs;
+  }
+  onUpload(result, filename){
+    if (!this.scene.isActive()) return;
+    if (!result.ok){
+      this.summary = { text: "! " + filename + ": " + result.error, color: "#F87171" };
+    } else if (result.questions.length < QP.MIN_BANK){
+      this.summary = { text: "! " + filename + ": only " + result.questions.length +
+        " valid question(s) — need at least " + QP.MIN_BANK + ". Keeping the current bank." +
+        this.skipText(result.skipped), color: "#FBBF24" };
+    } else {
+      BankState.setCustom(result.questions, filename);
+      const tN = result.questions.filter(q => q.skin !== "onboarding").length;
+      const oN = result.questions.filter(q => q.skin !== "theory").length;
+      const small = [tN < QP.MIN_BANK ? "theory" : null, oN < QP.MIN_BANK ? "onboarding" : null].filter(Boolean);
+      const dc = d => result.questions.filter(q => q.difficulty === d).length;
+      const routed = result.questions.some(q => q.diffExplicit);
+      this.summary = { text: "✔ Loaded " + result.questions.length + " questions from " + filename +
+        " · theory " + tN + " / onboarding " + oN +
+        (routed ? " · easy " + dc("easy") + " / med " + dc("medium") + " / hard " + dc("hard")
+                : " · no difficulty tags — one flat pool") +
+        (result.skipped.length ? " · skipped " + result.skipped.length + ":" + this.skipText(result.skipped) : "") +
+        (small.length ? "  ! small " + small.join(" + ") + " pool — questions will repeat" : ""),
+        color: "#4ADE80" };
+      SFX.correct();
+    }
+    this.render();
+  }
+  skipText(skipped){
+    if (!skipped.length) return "";
+    const shown = skipped.slice(0, 4).map(s => "row " + s.row + " (" + s.reason + ")").join("; ");
+    return " " + shown + (skipped.length > 4 ? "; +" + (skipped.length - 4) + " more" : "");
+  }
+}
+/* PreWave — the question phase. Launched over Play (paused). */
+class PreWaveScene extends Phaser.Scene {
+  constructor(){ super("PreWave"); }
+  init(data){ this.wave = data.wave; }
+  create(){
+    crispCam(this);
+    this.scene.bringToTop(); // question card must render above the board
+    this.play = this.scene.get("Play");
+    this.boss = isBossWave(this.wave);
+    this.qTotal = this.boss ? 3 : 2;
+    this.qIndex = 0;
+    this.streakAlive = true;
+    this.earned = 0;
+    this.ui = [];
+    this.add.rectangle(W/2, H/2, W, H, 0x0D1526, 0.78);
+    this.askNext();
+  }
+  clearUI(){ this.ui.forEach(o => o.destroy()); this.ui = []; }
+  askNext(){
+    this.clearUI();
+    if (this.qIndex >= this.qTotal || (this.boss && !this.streakAlive)) return this.finish();
+    const prefer = this.boss ? ["medium","hard"] : ["easy","medium"];
+    const q = this.play.pool.draw(prefer);
+    this.qIndex++;
+    this.curQ = q;
+    this.showGate(q).then(() => this.askNext());
+  }
+  // shared learning-gate contract: present one question, resolve correctness
+  showGate(q){
+    return new Promise(res => { this.gateResolve = res; this.showQuestion(q); });
+  }
+  finishGate(correct){
+    const r = this.gateResolve; this.gateResolve = null;
+    if (r) r(correct);
+  }
+  showQuestion(q){
+    const add = o => { this.ui.push(o); return o; };
+    const cardW = 640;
+    // choices are shown in a fresh scrambled order every time
+    this.disp = Phaser.Utils.Array.Shuffle(q.choices.slice());
+    const many = q.choices.length > 4;
+    const chSize = many ? 11 : 13;
+    const wrap = { wordWrap: { width: cardW - 130 }, align: "center" };
+    // measure user-supplied text so long prompts/choices never overflow
+    let maxCh = 0;
+    q.choices.forEach(ch => {
+      const t = this.add.text(0, 0, ch, Object.assign({ fontFamily: FONT, fontSize: chSize + "px" }, wrap)).setVisible(false);
+      maxCh = Math.max(maxCh, t.height); t.destroy();
+    });
+    const choiceH = Phaser.Math.Clamp(maxCh + 14, many ? 36 : 46, 84);
+    const gap = many ? 6 : 10;
+    const probe = this.add.text(0, 0, q.question,
+      { fontFamily: FONT, fontSize: "16px", wordWrap: { width: cardW - 60 }, align: "center" }).setVisible(false);
+    const promptH = probe.height; probe.destroy();
+    const headBase = this.boss ? 58 : 34;
+    const headH = headBase + promptH + 12;
+    const cardH = headH + q.choices.length * (choiceH + gap) + 14;
+    const top = Math.max(6, (H - cardH - 116) / 2);
+    this.resultY = Math.min(top + cardH + 8, H - 118); // result panel below the card, on-screen
+    const g = this.add.graphics();
+    g.fillStyle(PAL.panel, 0.97).fillRoundedRect(W/2 - cardW/2, top, cardW, cardH, 14);
+    g.lineStyle(2, this.boss ? PAL.amber : PAL.cyan, 1).strokeRoundedRect(W/2 - cardW/2, top, cardW, cardH, 14);
+    add(g);
+    if (this.boss){
+      add(T(this, W/2, top + 18, "★ BOSS WAVE " + this.wave + " — STREAK ROUND", 15, "#FBBF24", { fontStyle:"bold" }).setOrigin(0.5));
+      const pays = BAL.bossGold.map((v, i) => (i < this.qIndex - 1 ? "✔" : "") + v + "g");
+      add(T(this, W/2, top + 40,
+        "Question " + this.qIndex + "/3 · pays " + BAL.bossGold[this.qIndex - 1] +
+        "g · streak payouts " + pays.join(" → ") + " · a miss ends the streak (you keep banked gold)",
+        11, PAL.muted).setOrigin(0.5));
+    } else {
+      add(T(this, W/2, top + 18, "WAVE " + this.wave + " — question " + this.qIndex + "/2 (+"
+        + BAL.normalGold + "g if correct, no penalty)", 13, "#2DD4BF").setOrigin(0.5));
+    }
+    // mastery pips (Quizlet-style): one dot per required correct-in-a-row
+    const m = Profile.getMastery(qKey(q));
+    if (m.mastered){
+      add(T(this, W/2 + cardW/2 - 16, top + 18, "★ mastered", 9, "#4ADE80").setOrigin(1, 0.5));
+    } else {
+      const pipR = 4, gapP = 13;
+      const x1 = W/2 + cardW/2 - 16 - (m.need - 1) * gapP - pipR;
+      const pg = this.add.graphics();
+      for (let i = 0; i < m.need; i++){
+        if (i < m.streak) pg.fillStyle(PAL.green, 1).fillCircle(x1 + i * gapP, top + 18, pipR);
+        else pg.lineStyle(1.5, 0x93A5C0, 0.9).strokeCircle(x1 + i * gapP, top + 18, pipR);
+      }
+      add(pg);
+      add(T(this, x1 - pipR - 8, top + 18, "mastery", 9, PAL.muted).setOrigin(1, 0.5));
+    }
+    add(T(this, W/2, top + headBase + 2, q.question, 16, PAL.text,
+      { wordWrap: { width: cardW - 60 }, align: "center" }).setOrigin(0.5, 0));
+    let y = top + headH + 4;
+    this.disp.forEach((choice, i) => {
+      add(makeButton(this, W/2, y + choiceH/2, cardW - 80, choiceH, choice, chSize,
+        () => this.answer(q, i), { line: 0x3A5080, labelStyle: wrap }));
+      y += choiceH + gap;
+    });
+  }
+  answer(q, picked){
+    this.ui.filter(o => o.setDisabled).forEach(b => b.setDisabled(true));
+    const correct = QP.norm(this.disp[picked]) === QP.norm(q.answer);
+    this.play.stats.qAsked++;
+    Profile.recordAnswer(q.category, correct);
+    const m = Profile.recordMastery(qKey(q), correct);
+    this.play.pool.noteResult(q, correct);
+    let gain = 0;
+    if (correct){
+      this.play.stats.qCorrect++;
+      gain = this.boss ? BAL.bossGold[this.qIndex - 1] : BAL.normalGold;
+      this.earned += gain;
+      this.play.addGold(gain, "answer");
+      this.play.addScore(BAL.scoreAnswer);
+      this.play.awardXP(PROG.xpAnswer);
+      if (m.justMastered){
+        this.play.stats.qMastered++;
+        this.play.awardXP(PROG.xpMastered);
+      }
+      SFX.correct();
+    } else {
+      SFX.wrong();
+      if (this.boss) this.streakAlive = false;
+    }
+    this.showResult(q, picked, correct, gain, m);
+  }
+  showResult(q, picked, correct, gain, m){
+    const add = o => { this.ui.push(o); return o; };
+    // mark the buttons (by text so duplicate choices both read as the answer)
+    const btns = this.ui.filter(o => o.setDisabled);
+    btns.forEach((b, i) => {
+      if (QP.norm(this.disp[i]) === QP.norm(q.answer)) b.redraw(0x14402A, PAL.green);
+      else if (i === picked) b.redraw(0x402024, PAL.red);
+    });
+    const y = (this.resultY != null ? this.resultY : H - 126) + 34;
+    const g = this.add.graphics();
+    g.fillStyle(0x172642, 0.97).fillRoundedRect(W/2 - 320, y - 34, 640, 92, 12);
+    g.lineStyle(1, correct ? PAL.green : PAL.red, 1).strokeRoundedRect(W/2 - 320, y - 34, 640, 92, 12);
+    add(g);
+    let head = correct ? "✔ Correct  +" + gain + " gold" : "✘ Not quite — the answer is: " + q.answer;
+    if (!correct && this.boss) head += "   (streak ends — you keep " + this.earned + "g banked)";
+    if (m.justMastered) head += "   ★ MASTERED +" + PROG.xpMastered + " XP";
+    else if (correct && !m.mastered) head += "   · mastery " + m.streak + "/" + m.need;
+    else if (!correct) head += "   · mastery reset — " + m.need + " in a row to master it";
+    add(T(this, W/2, y - 16, head, 13, correct ? "#4ADE80" : "#F87171",
+      { wordWrap: { width: 600 }, align: "center" }).setOrigin(0.5));
+    if (q.why) add(T(this, W/2, y + 8, "Why: " + q.why, 12, PAL.muted,
+      { wordWrap: { width: 600 }, align: "center" }).setOrigin(0.5, 0));
+    const last = this.qIndex >= this.qTotal || (this.boss && !this.streakAlive);
+    add(makeButton(this, W/2, y + 44 + 14, 220, 36, last ? "To the build phase ▶" : "Next question ▶", 13,
+      () => this.finishGate(correct), { line: PAL.cyan }));
+    if (correct && !REDUCED){
+      const coin = T(this, W/2 + 200, y - 16, "+" + gain + "g", 16, "#FBBF24").setOrigin(0.5);
+      this.ui.push(coin);
+      this.tweens.add({ targets: coin, y: y - 56, alpha: 0, duration: 700, onComplete: () => coin.destroy() });
+    }
+  }
+  finish(){
+    this.clearUI();
+    this.scene.stop();
+    this.play.events.emit("prewave-done", this.earned);
+  }
+}
+/* Play — board, towers, waves. PreWave overlays between waves. */
+const TILE = 48, BOARD_X = 24, BOARD_Y = 68, COLS = 19, ROWS = 8;
+
+/* ================= MAPS ======================================
+   Each map is one path (list of [col,row] cells, source -> panel)
+   on the 19x8 board, plus per-skin marked-tile indices into that
+   path. Maps unlock as the player levels (Profile).             */
+function pathFrom(start, segs){ // segs: [dir, n] with dir R/L/U/D
+  const D = { R:[1,0], L:[-1,0], U:[0,-1], D:[0,1] };
+  const p = [start.slice()];
+  segs.forEach(([dir, n]) => {
+    const [dx, dy] = D[dir];
+    for (let i = 0; i < n; i++){
+      const [c, r] = p[p.length - 1];
+      p.push([c + dx, r + dy]);
+    }
+  });
+  return p;
+}
+const MAPS = [
+  { id:"bus", name:"Main Bus", unlock:1,
+    blurb:"The original run — balanced corners, room to build everywhere.",
+    cells: pathFrom([0,3], [["R",5],["D",3],["R",5],["U",5],["R",5],["D",3],["R",3]]),
+    tags: { theory:{ wet:[6], dwelling:[16] },
+            onboarding:{ wet:[6], height:[13], traffic:[19] } } },
+  { id:"switchback", name:"Switchback", unlock:3,
+    blurb:"A long serpentine — plenty of time on target, but three long straights to cover.",
+    cells: pathFrom([0,1], [["R",16],["D",2],["L",14],["D",2],["R",16]]),
+    tags: { theory:{ wet:[10], dwelling:[34] },
+            onboarding:{ wet:[10], height:[24], traffic:[42] } } },
+  { id:"shortrun", name:"Short Run", unlock:5,
+    blurb:"A short, direct feed — few tiles, no second chances.",
+    cells: pathFrom([0,4], [["R",7],["U",2],["R",4],["D",3],["R",7]]),
+    tags: { theory:{ wet:[5], dwelling:[14] },
+            onboarding:{ wet:[5], height:[11], traffic:[18] } } },
+  { id:"coil", name:"The Coil", unlock:8,
+    blurb:"A long spiral into the heart of the site — the panel sits deep inside.",
+    cells: pathFrom([0,0], [["R",18],["D",7],["L",16],["U",5],["R",13],["D",3],["L",9]]),
+    tags: { theory:{ wet:[14], dwelling:[48] },
+            onboarding:{ wet:[14], height:[32], traffic:[58] } } },
+];
+function mapById(id){ return MAPS.find(m => m.id === id) || MAPS[0]; }
+
+const cellX = c => BOARD_X + c * TILE + TILE / 2;
+const cellY = r => BOARD_Y + r * TILE + TILE / 2;
+
+class PlayScene extends Phaser.Scene {
+  constructor(){ super("Play"); }
+  init(data){
+    this.resume = (data && data.resume) || null;
+    // Phaser reuses the last start() payload when none is passed — without
+    // this, a plain START after a CONTINUE would silently resume again.
+    this.sys.settings.data = {};
+  }
+  create(){
+    const c = C();
+    this.map = mapById(G.mapId);
+    G.mapId = this.map.id;
+    crispCam(this);
+    this.cameras.main.setBackgroundColor(PAL.bg);
+    this.wave = 1;
+    this.gold = BAL.startGold;
+    this.hp = BAL.panelHP;
+    this.score = 0;
+    this.stats = { cleared:0, leaked:0, goldEarned:0, qAsked:0, qCorrect:0, qMastered:0, xpEarned:0 };
+    this.pool = new QuestionPool(BankState.questions, G.skin);
+    this.towers = [];
+    this.enemies = [];
+    this.spawnQueue = [];
+    this.phase = "prewave"; // prewave | build | wave
+    this.selectedDef = null;   // tower def picked from the build bar
+    this.selectedTower = null; // placed tower being inspected
+    this.claimedTags = {};
+    if (this.resume){
+      const s = this.resume;
+      this.wave = s.wave; this.gold = s.gold; this.hp = s.hp; this.score = s.score;
+      this.stats = Object.assign(this.stats, s.stats);
+      this.claimedTags = s.claimedTags || {};
+    }
+    this.speedMult = 1;
+    this.wavePlan = null;
+    this.previewObjs = [];
+    this.guideObjs = null;
+    this.pendingLevelMsg = null;
+    this.buildBoard();
+    this.buildHUD();
+    this.buildBar();
+    this.fx = this.add.graphics().setDepth(40);
+    this.shots = [];
+    this.events.off("prewave-done");
+    this.events.on("prewave-done", earned => {
+      this.input.enabled = true;
+      this.setPhase("build");
+      this.saveRun("build");
+      if (earned > 0) this.goldFloat(earned);
+      if (this.pendingLevelMsg) this.flushLevelMsg();
+    });
+    if (this.resume){
+      (this.resume.towers || []).forEach(ts => {
+        const def = c.towers.find(t => t.id === ts.id);
+        if (def) this.placeTower(def, ts.col, ts.row, ts);
+      });
+      const resumePhase = this.resume.phase;
+      this.resume = null;
+      if (resumePhase === "prewave") this.startPreWave();
+      else {
+        this.setPhase("build");
+        this.toast("Run restored — wave " + this.wave + " build phase", "#4ADE80");
+      }
+    } else {
+      this.startPreWave();
+    }
+  }
+
+  /* ---------- board ---------- */
+  buildBoard(){
+    const c = C();
+    const path = this.map.cells;
+    this.pathSet = new Set(path.map(([x, y]) => x + "," + y));
+    this.tagAt = {}; // "col,row" -> tagKey
+    const mtags = this.map.tags[G.skin] || {};
+    Object.entries(mtags).forEach(([tag, idxs]) =>
+      idxs.forEach(i => { const cell = path[i]; if (cell) this.tagAt[cell[0] + "," + cell[1]] = tag; }));
+    for (let col = 0; col < COLS; col++){
+      for (let row = 0; row < ROWS; row++){
+        const key = col + "," + row, onPath = this.pathSet.has(key);
+        const img = this.add.image(cellX(col), cellY(row), onPath ? "pathTile" : "tile").setScale(1 / K);
+        if (!onPath){
+          img.setInteractive({ useHandCursor: true });
+          img.on("pointerup", () => this.tileClicked(col, row, img));
+          img.on("pointerover", () => { if (this.selectedDef) img.setTintFill(0x2A4374); });
+          img.on("pointerout", () => img.clearTint());
+        }
+        const tag = this.tagAt[key];
+        if (tag){
+          const td = c.tileTags[tag];
+          this.add.rectangle(cellX(col), cellY(row) + 14, 34, 13, td.color, 0.9).setDepth(5);
+          T(this, cellX(col), cellY(row) + 14, td.label, 9, "#0D1526", { fontStyle:"bold" })
+            .setOrigin(0.5).setDepth(6);
+          const zone = this.add.zone(cellX(col), cellY(row), TILE, TILE)
+            .setInteractive({ useHandCursor: true });
+          zone.on("pointerover", () => this.showTagTip(col, row, tag));
+          zone.on("pointerout", () => this.hideTagTip());
+          zone.on("pointerup", () => { // touch: tap to peek, auto-hide
+            const tip = this.showTagTip(col, row, tag);
+            this.time.delayedCall(3000, () => { if (this.tagTip === tip) this.hideTagTip(); });
+          });
+        }
+      }
+    }
+    // source + panel markers
+    const [sc, sr] = path[0], [ec, er] = path[path.length - 1];
+    T(this, cellX(sc) - 6, Math.max(cellY(sr) - 34, 66), (G.skin === "theory" ? "SOURCE" : "SITE ENTRY") + " ▶", 10, PAL.muted).setOrigin(0, 0.5);
+    const pg = this.add.graphics().setDepth(5);
+    pg.fillStyle(0x2B3F66, 1).fillRoundedRect(cellX(ec) - 18, cellY(er) - 22, 36, 44, 4);
+    pg.lineStyle(2, PAL.cyan, 1).strokeRoundedRect(cellX(ec) - 18, cellY(er) - 22, 36, 44, 4);
+    pg.fillStyle(PAL.green, 1).fillRect(cellX(ec) - 10, cellY(er) - 14, 20, 5);
+    pg.fillStyle(PAL.green, 1).fillRect(cellX(ec) - 10, cellY(er) - 5, 20, 5);
+    pg.fillStyle(PAL.green, 1).fillRect(cellX(ec) - 10, cellY(er) + 4, 20, 5);
+    this.panelLabel = T(this, cellX(ec), Math.min(cellY(er) + 32, H - 88), G.skin === "theory" ? "PANEL" : "CREW", 10, "#2DD4BF").setOrigin(0.5);
+    this.waypoints = path.map(([col, row]) => ({ x: cellX(col), y: cellY(row) }));
+  }
+
+  showTagTip(col, row, tag){
+    this.hideTagTip();
+    const c = C(), td = c.tileTags[tag];
+    const names = td.towers.map(id => c.towers.find(t => t.id === id).label).join(" or ");
+    const msg = td.note + "\n" + (this.claimedTags[col + "," + row]
+      ? "✔ placement bonus claimed"
+      : "place " + names + " beside this tile: +" + BAL.placeBonusGold + "g");
+    this.tagTip = T(this, Phaser.Math.Clamp(cellX(col), 170, W - 170),
+      Math.max(cellY(row) - 34, 98), msg, 10, PAL.text,
+      { align: "center", wordWrap: { width: 300 }, backgroundColor: "#172642", padding: { x: 8, y: 6 } })
+      .setOrigin(0.5, 1).setDepth(75);
+    return this.tagTip;
+  }
+  hideTagTip(){
+    if (this.tagTip){ this.tagTip.destroy(); this.tagTip = null; }
+  }
+
+  /* ---------- HUD ---------- */
+  buildHUD(){
+    const c = C();
+    this.add.rectangle(W/2, 22, W, 44, 0x0F1930, 0.95).setDepth(50);
+    this.hudWave  = T(this, 16, 8, "", 13, "#2DD4BF").setDepth(51);
+    const coin = this.add.graphics().setDepth(51); // drawn coin, no emoji
+    coin.fillStyle(0xFBBF24, 1).fillCircle(147, 15, 7);
+    coin.fillStyle(0xB45309, 1).fillCircle(147, 15, 3.5);
+    this.hudGold  = T(this, 160, 8, "", 13, "#FBBF24").setDepth(51);
+    this.hudScore = T(this, 258, 8, "", 13, PAL.text).setDepth(51);
+    T(this, W/2, 14, c.skinLabel + " · " + c.title, 13, PAL.text).setOrigin(0.5, 0).setDepth(51);
+    this.hudHp = T(this, W - 16, 8, "", 13, "#4ADE80").setOrigin(1, 0).setDepth(51);
+    this.hudLvl = T(this, 16, 26, "", 11, "#A78BFA").setDepth(51);
+    this.hudMute = T(this, W - 16, 28, "sound " + (G.muted ? "off" : "on"), 11, PAL.muted).setOrigin(1, 0).setDepth(51)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerup", () => { G.muted = !G.muted; Profile.setPref("muted", G.muted);
+        this.hudMute.setText("sound " + (G.muted ? "off" : "on")); });
+    T(this, W - 104, 28, "menu", 11, PAL.muted).setOrigin(1, 0).setDepth(51)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerup", () => { this.scene.stop("PreWave"); this.scene.start("Menu"); });
+    this.toastText = T(this, W/2, 84, "", 13, "#FBBF24").setOrigin(0.5).setDepth(60);
+    this.refreshHUD();
+  }
+  refreshHUD(){
+    const c = C();
+    this.hudWave.setText("Wave " + this.wave +
+      (G.mode === "endless" ? " ∞" : "/" + BAL.waves) + (isBossWave(this.wave) ? " ★" : ""));
+    this.hudGold.setText(String(this.gold));
+    this.hudScore.setText("Score " + this.score);
+    const pp = Profile.get();
+    this.hudLvl.setText("Lv " + pp.level + " · " + pp.xp + "/" + Profile.xpToNext(pp.level) + " xp");
+    const segs = "▰".repeat(Math.max(0, this.hp)) + "▱".repeat(Math.max(0, BAL.panelHP - this.hp));
+    this.hudHp.setText(c.healthLabel + " " + segs);
+    this.hudHp.setColor(this.hp > 6 ? "#4ADE80" : this.hp > 3 ? "#FBBF24" : "#F87171");
+    if (this.barCards) this.barCards.forEach(card => card.refresh());
+  }
+  toast(msg, color){
+    this.toastText.setText(msg).setColor(color || "#FBBF24").setAlpha(1);
+    if (this.toastTween) this.toastTween.stop();
+    this.toastTween = this.tweens.add({ targets: this.toastText, alpha: 0, delay: 2200, duration: REDUCED ? 0 : 500 });
+  }
+  addGold(n, why){
+    this.gold += n;
+    if (n > 0) this.stats.goldEarned += n;
+    // gold gains float in under the coin in the HUD (during questions the
+    // card covers the HUD, so PreWave earnings get one summary float after)
+    if (n > 0 && this.phase !== "prewave" && this.toastText) this.goldFloat(n);
+    this.refreshHUD();
+  }
+  goldFloat(n){
+    const t = T(this, 142, 48, "+" + n + "g", 12, "#FBBF24").setDepth(55);
+    if (REDUCED) this.time.delayedCall(1000, () => t.destroy());
+    else this.tweens.add({ targets: t, y: 62, alpha: 0, duration: 1000, onComplete: () => t.destroy() });
+  }
+  addScore(n){ this.score += n; this.refreshHUD(); }
+  awardXP(n){
+    if (!n) return;
+    this.stats.xpEarned += n;
+    const ups = Profile.addXP(n);
+    if (ups.length) this.noteLevelUps(ups);
+    this.refreshHUD();
+  }
+  noteLevelUps(ups){
+    const lv = ups[ups.length - 1];
+    const unlocked = MAPS.filter(m => ups.includes(m.unlock));
+    let msg = "LEVEL UP — Lv " + lv + " · " + Profile.rank(lv);
+    if (unlocked.length) msg += " · map unlocked: " + unlocked.map(m => m.name).join(", ");
+    this.pendingLevelMsg = msg;
+    // the toast is hidden under the question card; hold it until build phase
+    if (this.phase !== "prewave") this.flushLevelMsg();
+  }
+  flushLevelMsg(){
+    if (!this.pendingLevelMsg) return;
+    this.toast(this.pendingLevelMsg, "#A78BFA");
+    SFX.coin();
+    this.pendingLevelMsg = null;
+  }
+  saveRun(phase){ // written at safe checkpoints; cleared on win/loss
+    RunSave.save({
+      v: 1, skin: G.skin, mapId: this.map.id, mode: G.mode, wave: this.wave, phase,
+      gold: this.gold, hp: this.hp, score: this.score, stats: this.stats,
+      claimedTags: this.claimedTags,
+      towers: this.towers.map(t => ({ id: t.def.id, col: t.col, row: t.row,
+        tier: t.tier, invested: t.invested })),
+      ts: Date.now(),
+    });
+  }
+
+  /* ---------- build bar ---------- */
+  buildBar(){
+    const c = C();
+    const barY = H - 40;
+    this.add.rectangle(W/2, barY, W, 80, 0x0F1930, 0.96).setDepth(50);
+    this.hintText = T(this, 12, H - 78,
+      "hover a card for details · GUIDE covers matchups, ground markings, upgrades & gold",
+      10, PAL.muted).setDepth(51);
+    this.barCards = [];
+    const n = c.towers.length;
+    const cw = 62, gap = 6;
+    let x = 12 + cw / 2;
+    c.towers.forEach(def => {
+      const card = this.makeTowerCard(x, barY + 4, cw, 60, def);
+      this.barCards.push(card);
+      x += cw + gap;
+    });
+    this.waveBtn = makeButton(this, W - 96, barY, 160, 40, "▶ START WAVE", 13,
+      () => { if (this.phase === "build") this.startWave(); }, { line: PAL.green, color: "#4ADE80" });
+    this.waveBtn.setDepth(51);
+    this.waveInfo = T(this, W - 12, H - 8, "", 10, "#FBBF24").setOrigin(1, 0.5).setDepth(51);
+    const gBtn = makeButton(this, W - 224, barY - 12, 84, 26, "GUIDE", 10,
+      () => this.toggleGuide(), { color: PAL.muted });
+    gBtn.setDepth(51);
+    this.speedBtn = makeButton(this, W - 224, barY + 18, 84, 26, "▶ 1×", 10, () => {
+      this.speedMult = this.speedMult >= 4 ? 1 : this.speedMult + 1;
+      this.speedBtn.label.setText("▶ " + this.speedMult + "×");
+      this.speedBtn.label.setColor(this.speedMult === 1 ? "#93A5C0" :
+        this.speedMult === 4 ? "#FBBF24" : "#2DD4BF");
+    }, { color: PAL.muted });
+    this.speedBtn.setDepth(51);
+  }
+  makeTowerCard(x, y, w, h, def){
+    const g = this.add.graphics().setDepth(51);
+    const t1 = T(this, 0, -18, def.glyph, 12, "#F1F5F9", { fontStyle: "bold", fontFamily: FONT_MONO }).setOrigin(0.5).setDepth(52);
+    const t2 = T(this, 0, 2, def.support ? "SUPPORT" : "", 7, PAL.muted).setOrigin(0.5).setDepth(52);
+    const t3 = T(this, 0, 18, def.cost + "g", 11, "#FBBF24").setOrigin(0.5).setDepth(52);
+    const cont = this.add.container(x, y, [g, t1, t2, t3]).setDepth(51);
+    cont.setSize(w, h).setInteractive({ useHandCursor: true });
+    const colorHex = "#" + def.color.toString(16).padStart(6, "0");
+    t1.setColor(colorHex);
+    cont.refresh = () => {
+      const afford = this.gold >= def.cost;
+      const sel = this.selectedDef === def;
+      g.clear();
+      g.fillStyle(sel ? 0x22345C : PAL.panel, 1).fillRoundedRect(-w/2, -h/2, w, h, 6);
+      g.lineStyle(2, sel ? def.color : (afford ? 0x3A5080 : 0x24334F), 1).strokeRoundedRect(-w/2, -h/2, w, h, 6);
+      cont.alpha = afford ? 1 : 0.45;
+    };
+    cont.on("pointerover", () => this.hintText.setText(this.cardHint(def)));
+    cont.on("pointerout", () => this.hintText.setText(this.selectedDef ?
+      "Tap a free tile to place the " + this.selectedDef.label : ""));
+    cont.on("pointerup", () => {
+      if (this.phase === "prewave") return;
+      this.closeInspect();
+      this.selectedDef = this.selectedDef === def ? null : def;
+      this.hintText.setText(this.selectedDef ?
+        "Tap a free tile to place · " + this.cardHint(def) : "");
+      this.barCards.forEach(cd => cd.refresh());
+    });
+    cont.refresh();
+    return cont;
+  }
+  cardHint(def){
+    const s = def.label + " " + def.cost + "g · " + this.stopsText(def) + " — " + def.desc;
+    return s.length > 82 ? s.slice(0, 81) + "…" : s;
+  }
+
+  /* ---------- placement & inspection ---------- */
+  tileClicked(col, row, img){
+    if (this.phase === "prewave") return;
+    const existing = this.towers.find(t => t.col === col && t.row === row);
+    if (existing) return this.inspect(existing);
+    if (!this.selectedDef){ this.closeInspect(); return; }
+    const def = this.selectedDef;
+    if (this.gold < def.cost){ this.toast("Not enough gold for the " + def.label, "#F87171"); return; }
+    this.gold -= def.cost;
+    this.placeTower(def, col, row);
+    this.refreshHUD();
+    if (this.phase === "build") this.saveRun("build");
+  }
+  placeTower(def, col, row, restore){
+    const x = cellX(col), y = cellY(row);
+    const base = this.add.image(x, y, "towerBase").setDepth(10).setScale(1 / K);
+    const colorHex = "#" + def.color.toString(16).padStart(6, "0");
+    const glyph = T(this, x, y - 4, def.glyph, 10, colorHex, { fontStyle: "bold", fontFamily: FONT_MONO }).setOrigin(0.5).setDepth(11);
+    const sub = T(this, x, y + 10, "", 8, PAL.muted, { fontFamily: FONT_MONO }).setOrigin(0.5).setDepth(11);
+    const pips = this.add.graphics().setDepth(11);
+    // nearest path index = this tower's position along the bus (for coordination)
+    let best = 0, bestD = 1e9;
+    this.waypoints.forEach((wp, i) => {
+      const d = Phaser.Math.Distance.Between(x, y, wp.x, wp.y);
+      if (d < bestD){ bestD = d; best = i; }
+    });
+    const tw = { def, col, row, x, y, base, glyph, sub, pips,
+      tier: { range: 0, rate: 0, amp: 0 }, invested: def.cost,
+      pathIdx: best, blownUntil: 0, lastShot: 0, nextPulse: 0 };
+    this.towers.push(tw);
+    if (restore){ // rebuilding from a run save: no sfx, bonuses, or toasts
+      tw.tier = Object.assign(tw.tier, restore.tier || {});
+      tw.invested = restore.invested || def.cost;
+      this.updateTowerSub(tw);
+      return;
+    }
+    SFX.place();
+    this.updateTowerSub(tw);
+    this.checkPlacementBonus(tw);
+    this.renderWavePreview();
+    if (def.support) this.toast(def.label + " placed — it strengthens nearby " + C().nouns.towers, "#93A5C0");
+  }
+  updateTowerSub(tw){
+    if (tw.def.special === "breaker") tw.sub.setText(BREAKER_RATINGS[tw.tier.amp] + "A");
+    else if (tw.def.support) tw.sub.setText("AURA");
+    else tw.sub.setText("");
+    this.updateTowerPips(tw);
+  }
+  // at-a-glance upgrade slots under the base: 3 per row, gray until bought,
+  // then lit — teal = range tiers, amber = clear-rate tiers
+  updateTowerPips(tw){
+    const g = tw.pips;
+    g.clear();
+    const y = tw.y + 15, EMPTY = 0x2E3A55;
+    const row = (x0, owned, lit) => {
+      for (let i = 0; i < 3; i++)
+        g.fillStyle(i < owned ? lit : EMPTY, 1).fillRect(x0 + i * 7, y, 5, 3);
+    };
+    if (tw.def.support){
+      row(tw.x - 10, tw.tier.range, PAL.cyan); // supports only upgrade range
+    } else {
+      row(tw.x - 20, tw.tier.range, PAL.cyan);
+      row(tw.x + 1, tw.tier.rate, PAL.amber);
+    }
+  }
+  towerRange(tw){ return tw.def.range * (1 + 0.2 * tw.tier.range); }
+  towerRate(tw){ return tw.def.rate * (1 + 0.25 * tw.tier.rate) * this.buffMult(tw); }
+  towerPower(tw){
+    let p = tw.def.power * this.buffMult(tw);
+    if (tw.def.special === "breaker") p *= 1 + 0.5 * tw.tier.amp;
+    return p;
+  }
+  buffMult(tw){
+    if (tw.def.support) return 1;
+    const inAura = this.towers.some(s => s.def.support && s !== tw &&
+      Phaser.Math.Distance.Between(s.x, s.y, tw.x, tw.y) <= this.towerRange(s));
+    return inAura ? 1 + BAL.supportBuff : 1;
+  }
+  checkPlacementBonus(tw){
+    const c = C();
+    for (const [key, tag] of Object.entries(this.tagAt)){
+      if (this.claimedTags[key]) continue;
+      const td = c.tileTags[tag];
+      if (!td.towers.includes(tw.def.id)) continue;
+      const [pc, pr] = key.split(",").map(Number);
+      if (Phaser.Math.Distance.Between(tw.x, tw.y, cellX(pc), cellY(pr)) <= TILE * 1.6){
+        this.claimedTags[key] = true;
+        this.addGold(BAL.placeBonusGold, "code");
+        this.awardXP(PROG.xpPlaceBonus);
+        this.toast("✔ Right " + C().nouns.tower + ", right place: " + td.note + "  +" + BAL.placeBonusGold + "g", "#4ADE80");
+        SFX.coin();
+        return;
+      }
+    }
+  }
+  inspect(tw){
+    this.selectedDef = null;
+    this.barCards.forEach(cd => cd.refresh());
+    this.closeInspect();
+    const px = 700, py = 96, pw = 248;
+    const ui = [];
+    ui.push(T(this, px + 12, py + 10, tw.def.label +
+      (tw.def.special === "breaker" ? " · " + BREAKER_RATINGS[tw.tier.amp] + "A" : ""), 13,
+      "#" + tw.def.color.toString(16).padStart(6, "0")).setDepth(71));
+    ui.push(T(this, px + 12, py + 28, this.stopsText(tw.def), 10, "#4ADE80").setDepth(71));
+    const descT = T(this, px + 12, py + 44, tw.def.desc, 10, PAL.muted,
+      { wordWrap: { width: pw - 24 } }).setDepth(71);
+    ui.push(descT);
+    const upCost = Math.round(tw.def.cost * BAL.upgradeMult);
+    const HINT_DEFAULT = "· hover an upgrade for what it does ·";
+    let hintTxt = null; // created below the buttons once their count is known
+    let by = Math.max(py + 90, py + 64 + descT.height); // buttons clear the description
+    const mkUp = (label, can, fn, hint) => {
+      const b = makeButton(this, px + pw/2, by, pw - 24, 28, label, 11, fn, { line: 0x3A5080 });
+      b.setDepth(71); if (!can) b.setDisabled(true);
+      b.on("pointerover", () => { if (hintTxt) hintTxt.setText(hint || HINT_DEFAULT); });
+      b.on("pointerout",  () => { if (hintTxt) hintTxt.setText(HINT_DEFAULT); });
+      ui.push(b); by += 34;
+    };
+    const refund = Math.round(tw.invested * BAL.sellRefund);
+    if (!tw.def.support){
+      mkUp("Range +20%  (" + upCost + "g)", this.gold >= upCost && tw.tier.range < 3,
+        () => this.upgrade(tw, "range", upCost),
+        "Wider circle covers more of the path (now tier " + tw.tier.range + "/3).");
+      mkUp("Clear rate +25%  (" + upCost + "g)",
+        this.gold >= upCost && tw.tier.rate < 3, () => this.upgrade(tw, "rate", upCost),
+        "Acts more often — clears " + C().nouns.enemies.toLowerCase() + " faster (now tier " + tw.tier.rate + "/3).");
+      if (tw.def.special === "breaker" && tw.tier.amp < BREAKER_RATINGS.length - 1)
+        mkUp("Amp rating → " + BREAKER_RATINGS[tw.tier.amp + 1] + "A  (" + upCost + "g)",
+          this.gold >= upCost, () => this.upgrade(tw, "amp", upCost),
+          "Hits harder, but trips ONLY faults above " + BREAKER_RATINGS[tw.tier.amp + 1] +
+          "A — smaller overloads will slip past. Oversizing loses protection.");
+    } else {
+      mkUp("Aura range +20%  (" + upCost + "g)", this.gold >= upCost && tw.tier.range < 3,
+        () => this.upgrade(tw, "range", upCost),
+        "Wider aura reaches more " + C().nouns.towers + " (+" + Math.round(BAL.supportBuff * 100) +
+        "% power) and slows more " + C().nouns.enemies.toLowerCase() + ".");
+    }
+    mkUp("Sell (+" + refund + "g)", true, () => { this.sell(tw, refund); },
+      "Removes it and refunds " + refund + "g (" + Math.round(BAL.sellRefund * 100) +
+      "% of the " + tw.invested + "g invested).");
+    hintTxt = T(this, px + 12, by - 8, HINT_DEFAULT, 9, PAL.muted,
+      { wordWrap: { width: pw - 24 }, lineSpacing: 2 }).setDepth(71);
+    ui.push(hintTxt);
+    const ph = by - py + 40; // room for a 3-line hover hint
+    const g = this.add.graphics().setDepth(70);
+    g.fillStyle(PAL.panel, 0.97).fillRoundedRect(px, py, pw, ph, 12);
+    g.lineStyle(2, tw.def.color, 1).strokeRoundedRect(px, py, pw, ph, 12);
+    ui.push(g);
+    // range ring
+    const ring = this.add.graphics().setDepth(9);
+    ring.lineStyle(2, tw.def.color, 0.5).strokeCircle(tw.x, tw.y, this.towerRange(tw));
+    ring.fillStyle(tw.def.color, 0.06).fillCircle(tw.x, tw.y, this.towerRange(tw));
+    ui.push(ring);
+    this.inspectUI = ui;
+    this.inspectTower = tw;
+  }
+  closeInspect(){
+    if (this.inspectUI){ this.inspectUI.forEach(o => o.destroy()); this.inspectUI = null; this.inspectTower = null; }
+  }
+  upgrade(tw, kind, cost){
+    if (this.gold < cost) return;
+    this.gold -= cost;
+    tw.tier[kind]++;
+    tw.invested += cost;
+    this.updateTowerSub(tw);
+    if (kind === "amp") this.toast("Breaker re-rated to " + BREAKER_RATINGS[tw.tier.amp] +
+      "A — trips faults above its rating; smaller overloads now slip past", "#2DD4BF");
+    SFX.place();
+    this.refreshHUD();
+    this.inspect(tw);
+    if (this.phase === "build") this.saveRun("build");
+  }
+  sell(tw, refund){
+    this.closeInspect();
+    this.towers = this.towers.filter(t => t !== tw);
+    [tw.base, tw.glyph, tw.sub, tw.pips].forEach(o => o.destroy());
+    this.addGold(refund, "sell");
+    this.renderWavePreview();
+    this.toast(tw.def.label + " removed (+" + refund + "g)", "#93A5C0");
+    if (this.phase === "build") this.saveRun("build");
+  }
+  stopsText(def){
+    if (def.support) return "support aura";
+    const m = C().match;
+    const stops = C().enemies.filter(e => (m[e.id] || []).includes(def.id));
+    return "stops " + stops.map(e => e.glyph).join("+");
+  }
+  toggleGuide(){
+    if (this.guideObjs) return this.closeGuide();
+    if (this.phase === "prewave") return;
+    const c = C(), objs = [];
+    const theory = G.skin === "theory";
+    const rows = c.enemies.map(e => ({
+      e, towers: c.towers.filter(t => (c.match[e.id] || []).includes(t.id)) }));
+    const supports = c.towers.filter(t => t.support);
+    const pw = 880, x0 = W/2 - pw/2, Lx = 24, Rx = 460;
+    const wrapL = { wordWrap: { width: 408 }, lineSpacing: 2 };
+    const wrapR = { wordWrap: { width: 388 }, lineSpacing: 2 };
+    // content goes in a container so both columns can be measured before the panel is drawn
+    const cont = this.add.container(0, 0).setDepth(82);
+    const put = (x, y, txt, size, color, extra) => {
+      const t = T(this, x, y, txt, size, color, extra); cont.add(t); return t; };
+    const head = (x, y, txt) => { put(x, y, txt, 12, "#2DD4BF", { fontStyle: "bold" }); return y + 22; };
+    let yL = 0, yR = 0;
+
+    /* left — what stops what */
+    yL = head(Lx, yL, "WHAT STOPS WHAT");
+    rows.forEach(r => {
+      put(Lx, yL, r.e.glyph, 11, "#" + r.e.color.toString(16).padStart(6, "0"), { fontStyle: "bold", fontFamily: FONT_MONO });
+      put(Lx + 44, yL, r.e.label, 11, PAL.text);
+      put(Lx + 186, yL, "→ " + r.towers.map(t => t.label).join(" · "), 10, "#4ADE80");
+      yL += 22;
+    });
+    yL += 6;
+    if (supports.length){
+      const t = put(Lx, yL, "SUPPORT — " + supports.map(t => t.label).join(" · ") +
+        ": clear nothing themselves, but nearby " + c.nouns.towers + " get +" +
+        Math.round(BAL.supportBuff * 100) + "% power and " + c.nouns.enemies.toLowerCase() +
+        " are slowed inside the aura.", 10, PAL.muted, wrapL);
+      yL += t.height + 8;
+    }
+    const hv = put(Lx, yL, "◆ HEAVY — ends every boss wave: slow and tough, costs " +
+      BAL.miniBossLeak + " " + c.healthLabel.toLowerCase() + " if it gets through. Same matching rules.",
+      10, PAL.muted, wrapL);
+    yL += hv.height + 14;
+
+    /* left — gold */
+    yL = head(Lx, yL, "EARNING GOLD");
+    [
+      "Questions: +" + BAL.normalGold + "g per correct · boss streak pays " + BAL.bossGold.join(" → ") +
+        "g — a miss ends it, banked gold is kept.",
+      "Marked tiles: +" + BAL.placeBonusGold + "g the first time the required " + c.nouns.tower +
+        " is placed beside one.",
+      "Selectivity: +" + BAL.coordBonusGold + "g when the " + c.nouns.tower + " nearest the " +
+        (theory ? "panel" : "crew") + " finishes a " + (theory ? "fault" : "hazard") + " others weakened.",
+    ].forEach(line => { const t = put(Lx, yL, line, 10, PAL.muted, wrapL); yL += t.height + 6; });
+
+    /* right — ground markings */
+    yR = head(Rx, yR, "GROUND MARKINGS (on the path)");
+    Object.values(c.tileTags).forEach(td => {
+      const badge = this.add.rectangle(Rx + 17, yR + 7, 34, 14, td.color, 0.9);
+      cont.add(badge);
+      put(Rx + 17, yR + 7, td.label, 9, "#0D1526", { fontStyle: "bold" }).setOrigin(0.5);
+      const names = td.towers.map(id => c.towers.find(t => t.id === id).label).join(" or ");
+      const t = put(Rx + 44, yR, td.note + " — place " + names + " beside it: +" +
+        BAL.placeBonusGold + "g once.", 10, PAL.muted, { wordWrap: { width: 344 }, lineSpacing: 2 });
+      yR += Math.max(t.height, 16) + 8;
+    });
+    yR += 6;
+
+    /* right — upgrades */
+    yR = head(Rx, yR, "UPGRADES (tap a placed " + c.nouns.tower + ")");
+    [
+      "Range +20% per tier (max 3) — a wider circle covers more of the path.",
+      "Clear rate +25% per tier (max 3) — the " + c.nouns.tower + " acts more often.",
+      theory
+        ? "Breaker amp rating (" + BREAKER_RATINGS.join(" → ") + "A) — hits harder, but a breaker trips ONLY faults above its rating: oversize it and small overloads slip past."
+        : "PPE Station softens each struck-by hazard once as it enters range; Competent Person pulses STOP-WORK freezes on hazards in its aura.",
+      theory
+        ? "Fuse — one-shots anything it can stop, then spends " + Math.round(BAL.fuseCooldownMs / 1000) + "s being replaced."
+        : null,
+      "Slots under a placed " + c.nouns.tower + " show its upgrades at a glance — gray = not yet bought; they light up teal (range) or amber (clear rate) as you upgrade (3 tiers each).",
+      "Upgrades cost " + Math.round(BAL.upgradeMult * 100) + "% of base price · selling refunds " +
+        Math.round(BAL.sellRefund * 100) + "% of everything invested.",
+    ].filter(Boolean).forEach(line => { const t = put(Rx, yR, line, 10, PAL.muted, wrapR); yR += t.height + 6; });
+
+    /* panel sized to the taller column */
+    const ph = Math.max(yL, yR) + 52 + 24;
+    const top = Math.max(48, (H - ph) / 2);
+    cont.setPosition(x0, top + 52);
+    const dim = this.add.rectangle(W/2, H/2, W, H, 0x0D1526, 0.7).setDepth(80)
+      .setInteractive().on("pointerup", () => this.closeGuide());
+    const g = this.add.graphics().setDepth(81);
+    g.fillStyle(PAL.panel, 0.98).fillRoundedRect(x0, top, pw, ph, 14);
+    g.lineStyle(2, PAL.cyan, 1).strokeRoundedRect(x0, top, pw, ph, 14);
+    g.lineStyle(1, PAL.panelLine, 1).lineBetween(x0 + 448, top + 48, x0 + 448, top + ph - 16);
+    objs.push(dim, g, cont,
+      T(this, W/2, top + 16, "FIELD GUIDE", 14, "#2DD4BF", { fontStyle: "bold" }).setOrigin(0.5).setDepth(82),
+      T(this, W/2, top + 34, "the wrong " + c.nouns.tower + " does nothing — match the type · each " +
+        c.nouns.enemies.toLowerCase().replace(/s$/, "") + " is tinted like a " + c.nouns.tower + " that stops it", 10, PAL.muted).setOrigin(0.5).setDepth(82),
+      T(this, W/2, top + ph - 10, "click anywhere to close", 9, PAL.muted).setOrigin(0.5).setDepth(82));
+    this.guideObjs = objs;
+  }
+  closeGuide(){
+    if (this.guideObjs){ this.guideObjs.forEach(o => o.destroy()); this.guideObjs = null; }
+  }
+
+  /* ---------- phases & waves ---------- */
+  setPhase(p){
+    this.phase = p;
+    this.waveBtn.setDisabled(p !== "build");
+    this.waveBtn.label.setText(p === "wave" ? "WAVE RUNNING" : "▶ START WAVE");
+    if (p === "build"){
+      this.planWave();
+      this.renderWavePreview();
+    }
+    this.refreshHUD();
+  }
+  planWave(){
+    const types = waveEnemyTypes(G.skin, this.wave);
+    const count = waveCount(this.wave);
+    this.wavePlan = [];
+    for (let i = 0; i < count; i++)
+      this.wavePlan.push({ type: Phaser.Utils.Array.GetRandom(types), mini: false });
+    if (isBossWave(this.wave))
+      this.wavePlan.push({ type: Phaser.Utils.Array.GetRandom(types), mini: true });
+  }
+  covered(type){
+    const m = C().match[type] || [];
+    return this.towers.some(t => m.includes(t.def.id));
+  }
+  // build-bar chips: what the next wave contains, red when nothing placed stops it
+  renderWavePreview(){
+    this.previewObjs.forEach(o => o.destroy());
+    this.previewObjs = [];
+    if (!this.wavePlan) return;
+    const counts = {};
+    let mini = false;
+    this.wavePlan.forEach(s => { if (s.mini) mini = true; else counts[s.type] = (counts[s.type] || 0) + 1; });
+    const c = C();
+    const types = Object.keys(counts);
+    const chipW = 52, y = H - 76;
+    let x = W - 16 - (types.length * (chipW + 4)) - (mini ? 60 : 0);
+    this.previewObjs.push(T(this, x - 8, y, (isBossWave(this.wave) ? "★ BOSS" : "NEXT") + " ▸", 10,
+      isBossWave(this.wave) ? "#FBBF24" : PAL.muted).setOrigin(1, 0.5).setDepth(52));
+    let uncovered = 0;
+    types.forEach(type => {
+      const def = c.enemies.find(e => e.id === type);
+      const ok = this.covered(type);
+      if (!ok) uncovered++;
+      const g = this.add.graphics().setDepth(52);
+      g.fillStyle(0x172642, 1).fillRoundedRect(x, y - 10, chipW, 20, 5);
+      g.lineStyle(1.5, ok ? def.color : PAL.red, 1).strokeRoundedRect(x, y - 10, chipW, 20, 5);
+      this.previewObjs.push(g);
+      this.previewObjs.push(T(this, x + chipW / 2, y, def.glyph + " ×" + counts[type], 10,
+        ok ? "#" + def.color.toString(16).padStart(6, "0") : "#F87171").setOrigin(0.5).setDepth(53));
+      const names = (c.match[type] || []).map(id => c.towers.find(t => t.id === id).label).join(" or ");
+      const zone = this.add.zone(x + chipW / 2, y, chipW + 4, 26).setInteractive();
+      zone.on("pointerover", () => this.hintText
+        .setText(def.label + " ×" + counts[type] + " incoming — stopped by " + names +
+          (ok ? "" : "  — NONE PLACED"))
+        .setColor(ok ? PAL.muted : "#F87171"));
+      zone.on("pointerout", () => this.hintText.setText("").setColor(PAL.muted));
+      this.previewObjs.push(zone);
+      x += chipW + 4;
+    });
+    if (mini){
+      const g = this.add.graphics().setDepth(52);
+      g.fillStyle(0x172642, 1).fillRoundedRect(x, y - 10, 56, 20, 5);
+      g.lineStyle(1.5, PAL.amber, 1).strokeRoundedRect(x, y - 10, 56, 20, 5);
+      this.previewObjs.push(g);
+      this.previewObjs.push(T(this, x + 28, y, "◆ HEAVY", 9, "#FBBF24").setOrigin(0.5).setDepth(53));
+      const hz = this.add.zone(x + 28, y, 60, 26).setInteractive();
+      hz.on("pointerover", () => this.hintText.setText("◆ HEAVY — slow, tough mini-boss · -" +
+        BAL.miniBossLeak + " " + c.healthLabel.toLowerCase() +
+        " if it gets through · same type rules apply"));
+      hz.on("pointerout", () => this.hintText.setText(""));
+      this.previewObjs.push(hz);
+    }
+    this.waveInfo.setText(uncovered
+      ? "! " + uncovered + " incoming type" + (uncovered > 1 ? "s" : "") + " uncovered" : "");
+  }
+  startPreWave(){
+    this.setPhase("prewave");
+    this.closeInspect();
+    this.selectedDef = null;
+    this.input.enabled = false;
+    this.scene.launch("PreWave", { wave: this.wave });
+  }
+  startWave(){
+    if (!this.wavePlan) this.planWave();
+    this.spawnQueue = this.wavePlan.slice(); // exactly what the preview promised
+    this.setPhase("wave");
+    this.closeInspect();
+    this.closeGuide();
+    const gap = BAL.spawnGapMs * Math.pow(0.97, this.wave - 1) / this.speedMult;
+    this.spawnEvent = this.time.addEvent({
+      delay: gap, repeat: this.spawnQueue.length - 1,
+      callback: () => this.spawnEnemy(this.spawnQueue.shift()),
+    });
+    this.spawnEnemy(this.spawnQueue.shift()); // first one immediately
+    if (this.spawnEvent.repeatCount > this.spawnQueue.length)
+      this.spawnEvent.repeatCount = this.spawnQueue.length;
+  }
+  spawnEnemy(spec){
+    if (!spec) return;
+    const c = C();
+    const def = c.enemies.find(e => e.id === spec.type);
+    const hp = Math.round(def.hp * waveHpMult(this.wave) * (spec.mini ? BAL.miniBossHpMult : 1));
+    const speed = def.speed * waveSpeedMult(this.wave) * (spec.mini ? BAL.miniBossSpeedMult : 1);
+    const tex = { circle:"eCircle", tri:"eTri", diamond:"eDiamond", bolt:"eBolt" }[def.shape] || "eCircle";
+    const scale = spec.mini ? 1.7 : 1;
+    const wp = this.waypoints[0];
+    const body = this.add.image(0, 0, tex).setTint(def.color).setScale(scale / K);
+    const badge = T(this, 0, spec.mini ? -30 : -22, def.glyph + (spec.mini ? " ◆" : ""), 9,
+      "#" + def.color.toString(16).padStart(6, "0"), { fontStyle:"bold", fontFamily: FONT_MONO }).setOrigin(0.5);
+    const hpBar = this.add.rectangle(0, spec.mini ? 26 : 18, 22 * scale, 3, PAL.green);
+    const parts = [body, badge, hpBar];
+    let ampsLabel = null;
+    const en = {
+      def, mini: spec.mini, hp, maxHp: hp, speed, wpIdx: 1,
+      x: wp.x - TILE, y: wp.y, dist: 0,
+      frozenUntil: 0, softened: false, noEffectShown: new Set(), contributors: new Set(),
+      leak: spec.mini ? BAL.miniBossLeak : 1, dead: false,
+    };
+    if (def.amps){
+      en.amps = spec.mini ? 60 : overloadAmps(this.wave);
+      ampsLabel = T(this, 0, 0, en.amps + "A", 8, "#0D1526", { fontStyle:"bold", fontFamily: FONT_MONO }).setOrigin(0.5);
+      parts.push(ampsLabel);
+    }
+    en.cont = this.add.container(en.x, en.y, parts).setDepth(20);
+    en.hpBar = hpBar;
+    this.enemies.push(en);
+  }
+
+  /* ---------- main loop ---------- */
+  update(time, delta){
+    // fuse blown/replaced display must track time in every phase, not just mid-wave
+    this.towers.forEach(tw => { if (tw.def.special === "fuse") this.fuseVisual(tw, time); });
+    if (this.phase !== "wave"){ this.drawShots(time); return; }
+    const dt = delta / 1000;
+    // supports: enemy slow auras + stop-work pulses
+    const auras = this.towers.filter(t => t.def.support);
+    auras.forEach(s => {
+      if (s.def.special === "stopwork" && time >= s.nextPulse){
+        s.nextPulse = time + BAL.stopWorkEveryMs / this.speedMult;
+        let hit = false;
+        this.enemies.forEach(en => {
+          if (!en.dead && Phaser.Math.Distance.Between(s.x, s.y, en.x, en.y) <= this.towerRange(s)){
+            en.frozenUntil = time + BAL.stopWorkFreezeMs / this.speedMult; hit = true;
+          }
+        });
+        if (hit){
+          this.float(s.x, s.y - 30, "STOP WORK", "#F1F5F9");
+          if (!REDUCED){
+            const ring = this.add.graphics().setDepth(30);
+            ring.lineStyle(2, 0xF1F5F9, 0.8).strokeCircle(s.x, s.y, this.towerRange(s));
+            this.tweens.add({ targets: ring, alpha: 0, duration: 500, onComplete: () => ring.destroy() });
+          }
+        }
+      }
+    });
+    // enemies move
+    this.enemies.forEach(en => {
+      if (en.dead) return;
+      let slow = 1;
+      auras.forEach(s => {
+        if (Phaser.Math.Distance.Between(s.x, s.y, en.x, en.y) <= this.towerRange(s)) slow = BAL.supportSlow;
+      });
+      if (time < en.frozenUntil) slow = 0;
+      const step = en.speed * slow * dt * this.speedMult;
+      let remaining = step;
+      while (remaining > 0 && en.wpIdx < this.waypoints.length){
+        const wp = this.waypoints[en.wpIdx];
+        const d = Phaser.Math.Distance.Between(en.x, en.y, wp.x, wp.y);
+        if (d <= remaining){ en.x = wp.x; en.y = wp.y; en.wpIdx++; remaining -= d; }
+        else {
+          const a = Math.atan2(wp.y - en.y, wp.x - en.x);
+          en.x += Math.cos(a) * remaining; en.y += Math.sin(a) * remaining;
+          remaining = 0;
+        }
+      }
+      en.dist += step;
+      en.cont.setPosition(en.x, en.y);
+      if (en.wpIdx >= this.waypoints.length) this.leak(en);
+    });
+    // towers act
+    this.towers.forEach(tw => {
+      if (tw.def.support) return;
+      if (tw.def.special === "fuse" && time < tw.blownUntil) return;
+      const range = this.towerRange(tw);
+      const rate = this.towerRate(tw);
+      // PPE softens struck-by severity once, on entry
+      if (tw.def.special === "ppe"){
+        this.enemies.forEach(en => {
+          if (!en.dead && !en.softened && en.def.id === "struckBy" &&
+              Phaser.Math.Distance.Between(tw.x, tw.y, en.x, en.y) <= range){
+            en.softened = true;
+            en.hp = Math.max(1, en.hp - Math.round(en.maxHp * 0.25));
+            this.float(en.x, en.y - 26, "severity ↓", "#2DD4BF");
+            this.updateHpBar(en);
+          }
+        });
+      }
+      if (time - tw.lastShot < 1000 / Math.max(rate * this.speedMult, 0.01)) return;
+      let target = null, bestDist = -1;
+      const matches = C().match;
+      this.enemies.forEach(en => {
+        if (en.dead) return;
+        const d = Phaser.Math.Distance.Between(tw.x, tw.y, en.x, en.y);
+        if (d > range) return;
+        const ok = (matches[en.def.id] || []).includes(tw.def.id);
+        if (!ok){
+          // the wrong device VISIBLY does nothing — flag once per pair
+          if (!en.noEffectShown.has(tw)){
+            en.noEffectShown.add(tw);
+            this.float(tw.x + Phaser.Math.Between(-14, 14), tw.y - 28 - Phaser.Math.Between(0, 8),
+              "no effect on " + en.def.glyph, "#93A5C0", 9);
+          }
+          return;
+        }
+        // breaker amp rule: trips only faults ABOVE its rating
+        if (tw.def.special === "breaker" && en.amps != null &&
+            en.amps <= BREAKER_RATINGS[tw.tier.amp]){
+          if (!en.noEffectShown.has(tw)){
+            en.noEffectShown.add(tw);
+            this.float(tw.x + Phaser.Math.Between(-14, 14), tw.y - 28 - Phaser.Math.Between(0, 8),
+              en.amps + "A ≤ " + BREAKER_RATINGS[tw.tier.amp] + "A — no trip", "#93A5C0", 9);
+          }
+          return;
+        }
+        if (en.dist > bestDist){ bestDist = en.dist; target = en; }
+      });
+      if (!target) return;
+      tw.lastShot = time;
+      let dmg = this.towerPower(tw);
+      if (tw.def.special === "fuse"){ dmg = 9999; tw.blownUntil = time + BAL.fuseCooldownMs / this.speedMult; }
+      // grounding node amplifies clearing of ground faults in its aura
+      if (target.def.id === "groundFault" &&
+          auras.some(s => s.def.id === "ground" &&
+            Phaser.Math.Distance.Between(s.x, s.y, target.x, target.y) <= this.towerRange(s)))
+        dmg *= 1.3;
+      target.contributors.add(tw);
+      target.hp -= dmg;
+      this.shots.push({ x1: tw.x, y1: tw.y, x2: target.x, y2: target.y,
+        color: tw.def.color, until: time + 90 });
+      this.updateHpBar(target);
+      if (target.hp <= 0) this.kill(target, tw);
+      if (tw.def.special === "fuse")
+        this.float(tw.x, tw.y - 28, "FUSE BLOWN — replacing…", "#F87171", 9);
+    });
+    this.drawShots(time);
+    // wave end
+    if (!this.spawnQueue.length && this.enemies.every(e => e.dead) &&
+        (!this.spawnEvent || this.spawnEvent.getProgress() === 1)) this.waveComplete();
+  }
+  fuseVisual(tw, time){
+    if (time < tw.blownUntil){
+      tw.glyph.setAlpha(0.3);
+      tw.sub.setText(Math.ceil((tw.blownUntil - time) / 1000) + "s");
+    } else if (tw.glyph.alpha < 1){
+      tw.glyph.setAlpha(1);
+      this.updateTowerSub(tw);
+    }
+  }
+  updateHpBar(en){
+    const f = Math.max(0, en.hp / en.maxHp);
+    en.hpBar.width = 22 * (en.mini ? 1.7 : 1) * f;
+    en.hpBar.fillColor = f > 0.5 ? PAL.green : f > 0.25 ? PAL.amber : PAL.red;
+  }
+  drawShots(time){
+    this.fx.clear();
+    this.shots = this.shots.filter(s => s.until > time);
+    this.shots.forEach(s => {
+      this.fx.lineStyle(2, s.color, 0.8).lineBetween(s.x1, s.y1, s.x2, s.y2);
+    });
+  }
+  float(x, y, msg, color, size){
+    const t = T(this, x, y, msg, size || 11, color).setOrigin(0.5).setDepth(45);
+    if (REDUCED) this.time.delayedCall(1100, () => t.destroy());
+    else this.tweens.add({ targets: t, y: y - 22, alpha: 0, duration: 1100, onComplete: () => t.destroy() });
+  }
+  kill(en, tw){
+    en.dead = true;
+    this.stats.cleared++;
+    this.addScore(BAL.scoreClear);
+    SFX.clear();
+    this.float(en.x, en.y - 20, en.def.label + " " + C().clearWord, "#4ADE80", 10);
+    // selectivity: the most-downstream contributor finishing a shared fault
+    if (en.contributors.size >= 2 &&
+        [...en.contributors].every(t2 => tw.pathIdx >= t2.pathIdx)){
+      this.addGold(BAL.coordBonusGold, "coordination");
+      this.float(en.x, en.y - 36, "coordination +" + BAL.coordBonusGold + "g", "#2DD4BF", 10);
+    }
+    if (!REDUCED){
+      for (let i = 0; i < 6; i++){
+        const p = this.add.image(en.x, en.y, "dot").setTint(en.def.color).setDepth(30).setScale(1 / K);
+        this.tweens.add({ targets: p, x: en.x + Phaser.Math.Between(-24, 24),
+          y: en.y + Phaser.Math.Between(-24, 24), alpha: 0, duration: 350,
+          onComplete: () => p.destroy() });
+      }
+    }
+    en.cont.destroy();
+  }
+  leak(en){
+    en.dead = true;
+    en.cont.destroy();
+    this.stats.leaked++;
+    this.hp -= en.leak;
+    SFX.leak();
+    this.toast("! " + C().leakWord + "  (-" + en.leak + " " + C().healthLabel.toLowerCase() + ")", "#F87171");
+    if (!REDUCED) this.cameras.main.shake(120, 0.004);
+    this.refreshHUD();
+    if (this.hp <= 0) this.gameOver(false);
+  }
+  waveComplete(){
+    if (this.phase !== "wave") return;
+    this.addScore(BAL.scoreWave);
+    this.awardXP(isBossWave(this.wave) ? PROG.xpBossWave : PROG.xpWave);
+    if (G.mode !== "endless" && this.wave >= BAL.waves) return this.gameOver(true);
+    this.wave++;
+    this.saveRun("prewave");
+    this.toast("Wave clear! " + (isBossWave(this.wave) ? "★ BOSS wave next — streak questions ahead" :
+      "Questions, then wave " + this.wave), "#4ADE80");
+    this.startPreWave();
+  }
+  gameOver(won){
+    if (this.phase === "over") return;
+    this.phase = "over";
+    if (won){
+      this.addScore(BAL.scoreHpBonus * Math.max(0, this.hp));
+      this.awardXP(PROG.xpWin);
+    }
+    RunSave.clear();
+    const rec = Profile.recordGame({ won, wave: won ? BAL.waves : this.wave - 1,
+      score: this.score, stats: this.stats, mapId: this.map.id });
+    this.time.delayedCall(600, () => {
+      this.scene.stop("PreWave");
+      this.scene.start("GameOver", { won, wave: this.wave, stats: this.stats,
+        score: this.score, hp: this.hp, mapName: this.map.name, rec });
+    });
+  }
+}
+class GameOverScene extends Phaser.Scene {
+  constructor(){ super("GameOver"); }
+  init(d){ this.d = d; }
+  create(){
+    const c = C(), d = this.d;
+    crispCam(this);
+    this.cameras.main.setBackgroundColor(PAL.bg);
+    const g = this.add.graphics();
+    g.lineStyle(1, PAL.grid, 0.5);
+    for (let x = 0; x <= W; x += 48) g.lineBetween(x, 0, x, H);
+    for (let y = 0; y <= H; y += 48) g.lineBetween(0, y, W, y);
+    const endless = G.mode === "endless";
+    const survived = d.won ? BAL.waves : d.wave - 1;
+    T(this, W/2, 70, endless ? "RUN COMPLETE" : d.won ? c.winTitle : c.loseTitle, 36,
+      endless ? "#FBBF24" : d.won ? "#4ADE80" : "#F87171", { fontStyle: "bold" }).setOrigin(0.5);
+    T(this, W/2, 110, endless
+      ? "Endless run — you held the " + c.healthLabel.toLowerCase() + " for " + survived +
+        " wave" + (survived === 1 ? "" : "s") + ". Rebuild and go deeper."
+      : d.won ? c.winText : c.loseText, 13, PAL.text,
+      { wordWrap: { width: 700 }, align: "center" }).setOrigin(0.5);
+    const acc = d.stats.qAsked ? Math.round(100 * d.stats.qCorrect / d.stats.qAsked) : 0;
+    const p = Profile.get();
+    const rows = [
+      ["Score", d.score + (d.rec && d.rec.newBestScore ? "  ★ new best" : "")],
+      ["Map", (d.mapName || "—") + (endless ? " · endless" : "")],
+      ["Waves survived", (endless ? String(survived) : survived + " / " + BAL.waves) +
+        (d.rec && d.rec.newBestWave ? "  ★" : "")],
+      [c.nouns.enemies + " " + c.clearWord, d.stats.cleared],
+      ["Questions", d.stats.qCorrect + " / " + d.stats.qAsked + " correct (" + acc + "%)"],
+      ["Questions mastered", "★ " + (d.stats.qMastered || 0)],
+      ["Gold earned", d.stats.goldEarned + "g"],
+      ["XP earned", "+" + (d.stats.xpEarned || 0)],
+    ];
+    const bx = W/2 - 210, by = 134;
+    const bg = this.add.graphics();
+    bg.fillStyle(PAL.panel, 0.9).fillRoundedRect(bx, by, 420, 24 * rows.length + 16, 14);
+    bg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(bx, by, 420, 24 * rows.length + 16, 14);
+    rows.forEach((r, i) => {
+      T(this, bx + 20, by + 12 + i * 24, r[0], 12, PAL.muted);
+      T(this, bx + 400, by + 12 + i * 24, String(r[1]), 12, PAL.text).setOrigin(1, 0);
+    });
+    // level + XP progress
+    const lbY = by + 24 * rows.length + 32;
+    T(this, bx + 10, lbY - 6, "Lv " + p.level + " · " + Profile.rank(p.level), 12, "#A78BFA");
+    const barX = bx + 210, barW = 130;
+    const xg = this.add.graphics();
+    xg.fillStyle(0x0B1E2D, 1).fillRoundedRect(barX, lbY - 4, barW, 8, 4);
+    const frac = Math.min(1, p.xp / Profile.xpToNext(p.level));
+    if (frac > 0.02) xg.fillStyle(PAL.violet, 1).fillRoundedRect(barX, lbY - 4, Math.max(8, barW * frac), 8, 4);
+    xg.lineStyle(1, PAL.panelLine, 1).strokeRoundedRect(barX, lbY - 4, barW, 8, 4);
+    T(this, bx + 410, lbY - 5, p.xp + "/" + Profile.xpToNext(p.level), 10, PAL.muted).setOrigin(1, 0);
+    const recapY = lbY + 26;
+    T(this, W/2, recapY, "REMEMBER", 12, "#2DD4BF").setOrigin(0.5);
+    const recap = Phaser.Utils.Array.Shuffle(c.ticker.slice()).slice(0, 2);
+    recap.forEach((line, i) =>
+      T(this, W/2, recapY + 20 + i * 18, "· " + line, 11, PAL.muted).setOrigin(0.5));
+    makeButton(this, W/2 - 110, H - 52, 190, 44, "↻ Play again", 14,
+      () => this.scene.start("Play"), { line: PAL.green, color: "#4ADE80" });
+    makeButton(this, W/2 + 110, H - 52, 190, 44, "Menu", 14, () => this.scene.start("Menu"));
+  }
+}
+
+/* ================= GAME ====================================== */
+window.__game = new Phaser.Game({
+  type: Phaser.AUTO,
+  parent: "game",
+  width: W * K, height: H * K, // hi-dpi backing store; scenes zoom back to 960x540 coords
+  backgroundColor: "#111C33",
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH, autoRound: true },
+  scene: [BootScene, PreloadScene, MenuScene, PlayScene, PreWaveScene, GameOverScene],
+});
+/* Testing hook: references for external harnesses; the game itself never reads this. */
+window.__dbg = { G, MAPS, CONTENT, BAL, PROG, QP, Profile, RunSave, BankState };
+</script>
+<!--
+HOW TO RUN
+  Double-click this file (or open it in any browser). No build, no server —
+  the Phaser CDN script tag is the only thing fetched. Add ?skin=onboarding
+  to open the Safe Site (construction-safety) skin directly, and ?map=<id>
+  (bus | switchback | shortrun | coil) to preview any map layout, ignoring
+  level locks.
+
+WHERE THE CONTENT LIVES
+  Enemies/hazards, towers/controls, prices, and the type-match table are data
+  in the CONTENT object near the top of the script (theory + onboarding).
+  Balance constants live in BAL, progression/XP/mastery constants in PROG,
+  and the map layouts (paths + marked tiles + unlock levels) in MAPS.
+
+PERSISTENCE (localStorage keys)
+  griddef.questions.v1 — the uploaded question bank.
+  griddef.profile.v1   — player profile: XP/level/rank, prefs (skin, map,
+                         mute), per-question mastery, lifetime stats.
+  griddef.save.v1      — the one run-save slot, written at the start of each
+                         build phase and between waves; cleared on win/loss.
+                         The Menu shows CONTINUE while one exists.
+
+MODES & PACING
+  Menu Mode toggle: 15-wave CAMPAIGN, or ENDLESS — waves keep escalating
+  until the panel/safety score runs out (study for as long as you can hold).
+  The in-game speed button cycles 1x -> 2x -> 3x -> 4x.
+
+LEVELING, MASTERY & MAPS
+  Correct answers, cleared waves, placement bonuses, and wins award XP;
+  levels unlock maps (see MAPS.unlock) and rank titles (PROG.ranks).
+  Question mastery works like Quizlet: answer a question correctly
+  PROG.masteryNeed times in a row to master it; a miss resets the streak and
+  raises the requirement (capped at PROG.masteryNeedMax). Mastered questions
+  stop appearing until nothing unmastered is left, answers are always shown
+  in a scrambled order, and missed questions come back around quickly.
+
+QUESTIONS ARE UPLOADED, NOT CODED
+  Add or replace questions from the Menu: upload a .csv or .json (or drop it
+  on the window). Columns: question, choices (pipe-delimited: A|B|C), answer
+  (exact text of the correct choice), why, difficulty (easy|medium|hard),
+  skin (theory|onboarding|both), category. Only the first three are required.
+  The bank persists in localStorage; "Reset to sample questions" restores the
+  bundled set. The bundled sample format is documented at SAMPLE_QUESTIONS.
+  Instructors: instructor.html (linked from the Menu) is a companion tool to
+  author, validate, import/export, and install question banks — no code edits.
+-->
+</body>
+</html>

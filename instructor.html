@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grid Defense — Instructor Question Builder</title>
+<style>
+/* Design tokens mirror grid-defense.html's refreshed palette (education-psychology design pass).
+   Prose/UI is sans-serif; the monospace stack is reserved for code-like/technical bits
+   (ids, CSV header names, file names, category codes) — same rule as the game. */
+:root{
+  --bg:#0D1526; --bg2:#111C33; --panel:#172642; --panel-line:#2B3F66;
+  --accent:#2DD4BF; --green:#4ADE80; --amber:#FBBF24; --red:#F87171; --violet:#A78BFA;
+  --text:#F1F5F9; --muted:#93A5C0; --choice-line:#3A5080; --hover:#22345C;
+  --ok-fill:#14402A; --bad-fill:#402024;
+  --mono:"Cascadia Code","Consolas","JetBrains Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:"Segoe UI","Trebuchet MS",Verdana,sans-serif;font-size:13px;line-height:1.5}
+code,.mono,#fId,#fCategory,.badge.cat{font-family:var(--mono)}
+body{min-height:100vh}
+.app{display:flex;align-items:stretch;min-height:100vh}
+
+/* ---------- sidebar navigation ---------- */
+#sidebar{width:220px;flex:none;background:var(--panel);border-right:1px solid var(--panel-line);
+  display:flex;flex-direction:column;gap:14px;padding:18px 14px;position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand .kicker{display:block;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--muted)}
+.brand h1{display:flex;align-items:center;gap:7px;margin:2px 0 10px;font-size:17px;color:var(--text)}
+.brand .bolt{width:15px;height:15px;fill:var(--accent);flex:none}
+a.gamelink{display:block;text-align:center;padding:8px 10px;border:2px solid var(--accent);border-radius:10px;
+  color:var(--text);text-decoration:none;background:var(--bg2);font-size:12px}
+a.gamelink:hover{background:var(--hover)}
+#nav{display:flex;flex-direction:column;gap:2px}
+.navitem{display:block;width:100%;text-align:left;background:none;border:none;border-left:3px solid transparent;
+  border-radius:0 10px 10px 0;color:var(--muted);font-size:13px;padding:9px 10px;min-height:38px;cursor:pointer}
+.navitem:hover{background:var(--hover);color:var(--text)}
+.navitem.active{border-left-color:var(--accent);background:var(--hover);color:var(--text);font-weight:600}
+.sidefoot{margin-top:auto}
+.chip{display:flex;align-items:center;gap:7px;background:var(--bg2);border:1px solid var(--panel-line);
+  border-radius:10px;padding:7px 10px;font-size:11px;color:var(--muted);line-height:1.35}
+.chip .dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--muted)}
+.chip .dot.g{background:var(--green)} .chip .dot.a{background:var(--amber)} .chip .dot.r{background:var(--red)}
+
+/* ---------- main content area ---------- */
+#content{flex:1;min-width:0;padding:18px 22px 40px;max-width:1220px}
+.viewnote{margin:0 0 12px;color:var(--muted);font-size:12px}
+
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+button{font-family:inherit;font-size:12px;color:var(--text);background:var(--panel);
+  border:2px solid var(--accent);border-radius:10px;padding:9px 14px;cursor:pointer;min-height:38px}
+button:hover{background:var(--hover)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px}
+button.primary{border-color:var(--green)}
+button.quiet{border-color:var(--panel-line);color:var(--muted)}
+button.danger{border-color:var(--red)}
+button.small{padding:4px 9px;min-height:28px;font-size:11px}
+button:disabled{opacity:.45;cursor:default}
+.toolnote{margin:0 0 10px;color:var(--muted);font-size:11px}
+
+.status{border:1px solid var(--panel-line);background:var(--panel);border-radius:10px;
+  padding:8px 12px;margin:0 0 14px;font-size:12px;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.status .msg{flex:1;min-width:200px}
+.status.ok{border-color:var(--green)}
+.status.warn{border-color:var(--amber)}
+.status.err{border-color:var(--red)}
+.status #stamp{color:var(--muted);font-size:11px;white-space:nowrap}
+
+/* ---------- questions view layout ---------- */
+.cols{display:grid;grid-template-columns:minmax(340px,5fr) minmax(380px,6fr);gap:16px;align-items:start}
+@media (max-width:1080px){ .cols{grid-template-columns:1fr} }
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+@media (max-width:860px){
+  .app{flex-direction:column}
+  #sidebar{width:100%;height:auto;position:static;overflow:visible}
+  #nav{flex-direction:row;flex-wrap:wrap}
+  .navitem{width:auto;border-left:none;border-bottom:3px solid transparent;border-radius:10px 10px 0 0}
+  .navitem.active{border-left:none;border-bottom-color:var(--accent)}
+  .sidefoot{margin-top:4px}
+}
+
+.panel{background:var(--panel);border:1px solid var(--panel-line);border-radius:14px;padding:14px 16px;min-width:0}
+.panel h2{margin:0 0 10px;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:600}
+.panelhead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.panelhead h2{margin:0}
+
+/* ---------- readiness ---------- */
+#readiness ul{list-style:none;margin:0;padding:0}
+#readiness li{padding:3px 0;display:flex;gap:8px;align-items:baseline}
+#readiness li .lamp{width:9px;height:9px;border-radius:50%;flex:none;position:relative;top:0}
+.lamp.g{background:var(--green)} .lamp.a{background:var(--amber)} .lamp.r{background:var(--red)} .lamp.m{background:var(--muted)}
+#readiness .warn{color:var(--amber)}
+#readiness .bad{color:var(--red)}
+#readiness .foot{margin-top:8px;color:var(--muted);font-size:11px}
+
+/* ---------- question list ---------- */
+#qlist{list-style:none;margin:0;padding:0;max-height:52vh;overflow-y:auto}
+#qlist li{display:flex;gap:6px;align-items:stretch;margin-bottom:6px;min-width:0}
+.qrow{flex:1;min-width:0;text-align:left;background:var(--bg2);border:1px solid var(--panel-line);
+  border-radius:10px;padding:7px 10px;display:flex;flex-direction:column;gap:4px}
+.qrow:hover{background:var(--hover)}
+.qrow.selected{border-color:var(--accent);border-width:2px;padding:6px 9px}
+.qrow .prompt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.qrow .prompt .num{color:var(--muted)}
+.qrow .meta{display:flex;gap:6px;flex-wrap:wrap;font-size:10px}
+.badge{border:1px solid var(--panel-line);border-radius:4px;padding:0 5px;color:var(--muted);white-space:nowrap}
+.badge.d-easy{color:var(--green);border-color:var(--green)}
+.badge.d-medium{color:var(--accent);border-color:var(--choice-line)}
+.badge.d-hard{color:var(--red);border-color:var(--red)}
+.badge.skin{color:var(--violet);border-color:var(--violet)}
+.badge.ok{color:var(--green);border-color:var(--green)}
+.badge.bad{color:var(--red);border-color:var(--red)}
+.badge.pipe{color:var(--amber);border-color:var(--amber)}
+.rowbtns{display:flex;flex-direction:column;gap:4px;justify-content:center}
+.empty{color:var(--muted);font-size:12px;margin:4px 0}
+
+/* ---------- editor form ---------- */
+label{display:block;color:var(--muted);font-size:11px;margin:10px 0 3px;letter-spacing:.5px}
+input[type=text],textarea,select{width:100%;font-family:inherit;font-size:13px;color:var(--text);
+  background:var(--bg2);border:1px solid var(--choice-line);border-radius:10px;padding:7px 9px}
+textarea{resize:vertical;min-height:58px}
+input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+fieldset{border:1px solid var(--panel-line);border-radius:10px;margin:12px 0 0;padding:8px 10px 10px}
+legend{color:var(--muted);font-size:11px;padding:0 6px}
+.choicerow{display:flex;gap:8px;align-items:center;margin:6px 0}
+.choicerow input[type=radio]{flex:none;width:16px;height:16px;accent-color:#4ADE80;cursor:pointer}
+.choicerow input[type=text]{flex:1;min-width:0}
+.choicerow .del{flex:none}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+@media (max-width:520px){ .formgrid{grid-template-columns:1fr} }
+#fErrors{margin-top:12px;border-radius:10px;padding:8px 12px;font-size:12px}
+#fErrors.good{border:1px solid var(--green);color:var(--green)}
+#fErrors.bad{border:1px solid var(--red);color:var(--red)}
+#fErrors ul{margin:4px 0 0;padding-left:18px}
+#fErrors .pipenote{color:var(--amber);display:block;margin-top:4px}
+.placeholder{color:var(--muted);font-size:12px}
+.editactions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+
+/* ---------- in-game preview (mirrors the game's question card) ---------- */
+.qcard{background:var(--panel);border:2px solid var(--accent);border-radius:14px;padding:14px 18px 12px}
+.qcard .wavehead{color:var(--accent);font-size:12px;text-align:center;margin-bottom:10px}
+.qcard .prompt{color:var(--text);font-size:16px;text-align:center;white-space:pre-wrap;
+  overflow-wrap:break-word;margin:0 0 12px}
+.qchoice{display:block;width:100%;background:var(--panel);border:2px solid var(--choice-line);border-radius:10px;
+  color:var(--text);font-size:13px;padding:12px 14px;margin:9px 0;text-align:center;position:relative;
+  overflow-wrap:break-word}
+.qchoice:hover{background:var(--hover)}
+.qchoice .ctag{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  font-size:9px;color:var(--green);border:1px solid var(--green);border-radius:4px;padding:0 4px;background:var(--panel)}
+.qcard.answered .ctag{display:none}
+.qcard.answered .qchoice{cursor:default}
+.qchoice.reveal-ok{background:var(--ok-fill);border-color:var(--green)}
+.qchoice.reveal-bad{background:var(--bad-fill);border-color:var(--red)}
+.qresult{border-radius:14px;padding:10px 14px;margin-top:10px;text-align:center;background:var(--panel)}
+.qresult.good{border:1px solid var(--green)}
+.qresult.bad{border:1px solid var(--red)}
+.qresult .head{font-size:13px}
+.qresult.good .head{color:var(--green)}
+.qresult.bad .head{color:var(--red)}
+.qresult .why{color:var(--muted);font-size:12px;margin-top:6px}
+.qresult button{margin-top:10px}
+.prevnote{color:var(--amber);font-size:11px;margin-top:8px}
+
+/* ---------- import summary ---------- */
+#importPanel{border:1px solid var(--amber);background:var(--panel);border-radius:14px;padding:12px 16px;margin:14px 0 0}
+#importPanel h2{margin:0 0 8px;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--amber)}
+#importPanel .skips{max-height:140px;overflow-y:auto;margin:8px 0;font-size:11px;color:var(--red)}
+#importPanel .skips div{padding:1px 0}
+#importPanel .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+#importPanel .hint{color:var(--muted);font-size:11px;margin-top:6px}
+
+/* ---------- tips ---------- */
+.tips ul{margin:6px 0 2px;padding-left:20px;color:var(--text);font-size:12px}
+.tips li{margin:6px 0}
+.tips code{background:var(--bg2);border:1px solid var(--panel-line);border-radius:4px;padding:0 4px;font-family:var(--mono);font-size:11px}
+
+/* ---------- drag-drop overlay (same treatment as the game) ---------- */
+#dropzone{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(17,28,51,.92);border:3px dashed var(--accent);z-index:50;
+  color:var(--text);font-size:26px;text-align:center;pointer-events:none}
+#dropzone.show{display:flex}
+#dropzone .sub{display:block;font-size:15px;color:var(--muted);margin-top:8px}
+
+footer{margin-top:22px;color:var(--muted);font-size:11px;border-top:1px solid var(--panel-line);padding-top:10px}
+#errlog{display:none}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside id="sidebar" aria-label="Tool navigation">
+    <div class="brand">
+      <span class="kicker">Grid Defense</span>
+      <h1><svg class="bolt" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>Instructor Builder</h1>
+      <a class="gamelink" href="grid-defense.html">▶ Open Grid Defense</a>
+    </div>
+    <nav id="nav" aria-label="Sections">
+      <button type="button" class="navitem" data-view="questions">Questions</button>
+      <button type="button" class="navitem" data-view="import">Import</button>
+      <button type="button" class="navitem" data-view="export">Export &amp; install</button>
+      <button type="button" class="navitem" data-view="readiness">Bank readiness</button>
+      <button type="button" class="navitem" data-view="tips">Authoring tips</button>
+    </nav>
+    <div class="sidefoot">
+      <div class="chip" id="chip" title="Bank health: valid questions and per-skin pools (details under Bank readiness)">
+        <span class="dot" id="chipDot"></span><span id="chipText">0 valid</span>
+      </div>
+    </div>
+  </aside>
+
+  <main id="content">
+    <div id="status" class="status"><span class="msg" id="statusMsg" aria-live="polite">Working draft autosaves to this browser — close and come back any time.</span><span id="stamp"></span></div>
+
+    <section id="view-questions" class="view" aria-label="Questions">
+      <div class="cols">
+        <section class="col">
+          <div class="panel">
+            <div class="panelhead">
+              <h2>Questions</h2>
+              <button id="btnAdd" class="small" title="Add a new blank question">+ Add question</button>
+            </div>
+            <ol id="qlist" aria-label="Question list"></ol>
+            <p class="empty" id="qlistEmpty" hidden>No questions yet — click <strong>+ Add question</strong>, or bring questions in from the <strong>Import</strong> section.</p>
+          </div>
+        </section>
+        <section class="col">
+          <div class="panel">
+            <div class="panelhead">
+              <h2>Question editor</h2>
+              <span id="editorPos" class="empty"></span>
+            </div>
+            <div id="editorBody"></div>
+          </div>
+          <div class="panel">
+            <h2>In-game preview</h2>
+            <div id="preview"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="view-import" class="view" aria-label="Import" hidden>
+      <div class="panel">
+        <h2>Import questions</h2>
+        <p class="viewnote">Load an existing bank from a .csv or .json file — or drop a file anywhere on this page, from any section. Files are parsed with the same rules as the game; rows with problems are listed and skipped, and everything that loads becomes editable under Questions.</p>
+        <div class="toolbar">
+          <button id="btnImport" title="Load questions from a .csv or .json file">Import CSV / JSON…</button>
+          <button id="btnLoadGame" title="Load the bank the game currently has stored in this browser">Load current game bank</button>
+          <button id="btnNew" class="quiet" title="Clear the working bank and the autosaved draft">New empty bank</button>
+        </div>
+      </div>
+      <div id="importPanel" hidden></div>
+    </section>
+
+    <section id="view-export" class="view" aria-label="Export and install" hidden>
+      <div class="panel">
+        <h2>Export &amp; install</h2>
+        <p class="viewnote">Only valid questions are exported or installed; anything flagged in the Questions list is held back and reported here.</p>
+        <div class="toolbar">
+          <button id="btnExportCsv" title="Download the valid questions as a UTF-8 CSV file">Export CSV</button>
+          <button id="btnExportJson" title="Download the valid questions as a JSON file">Export JSON</button>
+          <button id="btnInstall" class="primary" title="Writes this bank into Grid Defense's stored question bank. Works when the game is opened in this same browser.">Install into game</button>
+        </div>
+        <p class="toolnote">“Install into game” publishes the bank directly to Grid Defense <strong>in this browser</strong> (the game reads it on its next launch or menu visit). To hand questions to someone else, export a file and use the game's <em>Upload Questions</em> menu.</p>
+      </div>
+    </section>
+
+    <section id="view-readiness" class="view" aria-label="Bank readiness" hidden>
+      <div class="panel" id="readiness">
+        <h2>Bank readiness</h2>
+        <div id="readinessBody"></div>
+      </div>
+    </section>
+
+    <section id="view-tips" class="view" aria-label="Authoring tips" hidden>
+      <div class="panel tips">
+        <h2>Authoring tips</h2>
+        <ul>
+          <li>The correct <code>answer</code> is always the <strong>exact text of a choice</strong>, never a number. This tool guarantees that: you mark the answer by selecting a choice, and exports copy its text.</li>
+          <li>In CSV files, the choices live in <strong>one cell separated by the pipe character</strong> <code>|</code>, e.g. <code>GFCI|AFCI|SPD|Fuse</code>. Because of that, a choice cannot itself contain a <code>|</code> in CSV — use Export JSON for such questions.</li>
+          <li>Fields containing commas, quotes, or line breaks are quoted automatically on export. If you ever edit CSV by hand, wrap those fields in double quotes.</li>
+          <li>Keep 3–4 choices per question. 2 is allowed (but easy); more than 6 is rejected; the same choice text may not appear twice in one question.</li>
+          <li><code>why</code>, <code>category</code>, and <code>id</code> are optional. <code>difficulty</code> defaults to <em>medium</em>, <code>skin</code> to <em>both</em>. Difficulty routes questions: normal waves prefer easy/medium, boss waves prefer medium/hard.</li>
+          <li>Save CSV as <strong>UTF-8</strong> (Excel: “CSV UTF-8”). Files exported here are already UTF-8.</li>
+          <li>The game accepts a bank only when it has <strong>at least 5 valid questions</strong>; keep each skin's pool at 5 or more so questions do not repeat too quickly.</li>
+        </ul>
+      </div>
+    </section>
+
+    <footer>Grid Defense · ElectriAI Arcade — instructor tooling. Everything runs locally: files are read in your browser and banks are stored in this browser's storage. Nothing is uploaded anywhere.</footer>
+  </main>
+</div>
+
+<div id="dropzone">Drop a .csv or .json question file<span class="sub">It loads into the instructor workspace for review — nothing is installed until you say so</span></div>
+<input type="file" id="qfile" accept=".csv,.json,application/json,text/csv" hidden>
+<datalist id="catList">
+  <option value="OCP"><option value="GBF"><option value="PDS">
+  <option value="Grounding"><option value="Surge"><option value="Sizing"><option value="Arc protection">
+  <option value="PPE"><option value="Housekeeping"><option value="LOTO"><option value="Safety culture"><option value="Struck-by">
+</datalist>
+<div id="errlog"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   GRID DEFENSE — INSTRUCTOR QUESTION BUILDER
+   Companion tool to grid-defense.html. Parsing/validation below
+   is copied from the game's QP module so both sides agree.
+   ============================================================ */
+
+/* Uncaught-error capture (surfaced by the ?selftest=1 harness and #errlog). */
+const ERRS = [];
+window.addEventListener("error", e => {
+  ERRS.push(e.message || String(e.error || e));
+  const el = document.getElementById("errlog");
+  if (el) el.textContent = "JS errors: " + ERRS.join(" | ");
+});
+
+/* ---------- constants ---------- */
+const DIFFS = ["easy", "medium", "hard"];
+const SKINS = ["theory", "onboarding", "both"];
+const GAME_LS_KEY  = "griddef.questions.v1";        // the game's stored-bank key (grid-defense.html QP.LS_KEY)
+const DRAFT_LS_KEY = "griddef.instructor.draft.v1"; // this tool's autosave key (separate on purpose)
+const GAME_MIN = 5;                                  // game's MIN_BANK
+const CSV_HEADER = "question,choices,answer,why,difficulty,skin,category,id";
+
+/* ---------- game-identical parsing & validation (copied from grid-defense.html) ---------- */
+const norm = s => String(s == null ? "" : s).trim().toLowerCase().replace(/\s+/g, " ");
+function stripBOM(t){ return t.charCodeAt(0) === 0xFEFF ? t.slice(1) : t; }
+
+// Quote-aware CSV parser: handles "", commas in quotes, CRLF.
+function parseCSV(text){
+  text = stripBOM(text);
+  const rows = []; let field = "", row = [], inQ = false;
+  for (let i = 0; i < text.length; i++){
+    const c = text[i];
+    if (inQ){
+      if (c === '"'){
+        if (text[i+1] === '"'){ field += '"'; i++; }
+        else inQ = false;
+      } else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ","){ row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r"){
+      if (c === "\r" && text[i+1] === "\n") i++;
+      row.push(field); field = "";
+      rows.push(row); row = [];
+    } else field += c;
+  }
+  if (field !== "" || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(f => f.trim() !== ""));
+}
+
+// CSV rows -> raw objects keyed by lowercased header (order-independent)
+function csvToObjects(text){
+  const rows = parseCSV(text);
+  if (rows.length < 2) throw new Error("CSV needs a header row plus at least one question row.");
+  const headers = rows[0].map(h => norm(h));
+  if (!headers.includes("question")) throw new Error("CSV header row must include a 'question' column.");
+  return rows.slice(1).map(r => {
+    const o = {};
+    headers.forEach((h, i) => { if (h) o[h] = r[i] !== undefined ? r[i] : ""; });
+    return o;
+  });
+}
+
+function jsonToObjects(text){
+  let data = JSON.parse(stripBOM(text));
+  if (data && !Array.isArray(data) && Array.isArray(data.questions)) data = data.questions;
+  if (!Array.isArray(data)) throw new Error("JSON must be an array of questions or { \"questions\": [...] }.");
+  return data;
+}
+
+// One raw object -> validated question or {skip:reason} — identical to the game's loader.
+function validateRow(raw, idx){
+  if (raw == null || typeof raw !== "object") return { skip:"not an object" };
+  const q = String(raw.question == null ? "" : raw.question).trim();
+  if (!q) return { skip:"empty question" };
+  let choices = raw.choices;
+  if (typeof choices === "string") choices = choices.split("|");
+  if (!Array.isArray(choices)) return { skip:"choices missing" };
+  choices = choices.map(c => String(c == null ? "" : c).trim()).filter(c => c !== "");
+  if (choices.length < 2) return { skip:"fewer than 2 choices" };
+  if (choices.length > 6) return { skip:"more than 6 choices" };
+  if (new Set(choices.map(norm)).size !== choices.length) return { skip:"duplicate choices" };
+  const ansRaw = String(raw.answer == null ? "" : raw.answer);
+  const ai = choices.findIndex(c => norm(c) === norm(ansRaw));
+  if (norm(ansRaw) === "") return { skip:"answer missing" };
+  if (ai < 0) return { skip:'answer "' + ansRaw.trim() + '" matches no choice' };
+  const dRaw = norm(raw.difficulty), sRaw = norm(raw.skin);
+  let difficulty = "medium", diffExplicit = false;
+  if (dRaw){ if (!DIFFS.includes(dRaw)) return { skip:'invalid difficulty "' + String(raw.difficulty).trim() + '"' };
+             difficulty = dRaw; diffExplicit = true; }
+  let skin = "both";
+  if (sRaw){ if (!SKINS.includes(sRaw)) return { skip:'invalid skin "' + String(raw.skin).trim() + '"' };
+             skin = sRaw; }
+  return { q:{
+    question:q, choices, answer:choices[ai], answerIndex:ai,
+    why:String(raw.why == null ? "" : raw.why).trim(),
+    difficulty, diffExplicit, skin,
+    category:String(raw.category == null ? "" : raw.category).trim(),
+    id:String(raw.id == null ? "" : raw.id).trim() || ("q" + (idx + 1)),
+  }};
+}
+
+/* ---------- import (same rules as the game; blank ids stay blank here) ---------- */
+function importText(text, filename){
+  const isJson = /\.json$/i.test(filename || "") || /^[\s﻿]*[\[{]/.test(text);
+  let raws;
+  try { raws = isJson ? jsonToObjects(text) : csvToObjects(text); }
+  catch (e){ return { ok:false, error:(isJson ? "JSON" : "CSV") + " parse failed: " + e.message }; }
+  const drafts = [], skipped = [];
+  raws.forEach((raw, i) => {
+    const res = validateRow(raw, i);
+    if (res.skip){ skipped.push({ row: i + 1, reason: res.skip }); return; }
+    const q = res.q;
+    drafts.push({
+      question: q.question, choices: q.choices.slice(), answerIndex: q.answerIndex,
+      why: q.why, difficulty: q.difficulty, skin: q.skin, category: q.category,
+      // keep a blank id blank (the game auto-assigns at load time); preserves file round-trips
+      id: String(raw && raw.id != null ? raw.id : "").trim(),
+    });
+  });
+  return { ok:true, drafts, skipped };
+}
+
+/* ---------- export ---------- */
+function csvField(s){
+  s = String(s == null ? "" : s);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function serializeCSV(rows){
+  const lines = [CSV_HEADER];
+  rows.forEach(r => lines.push(
+    [r.question, r.choices.join("|"), r.answer, r.why, r.difficulty, r.skin, r.category, r.id]
+      .map(csvField).join(",")));
+  return "﻿" + lines.join("\r\n") + "\r\n"; // BOM so Excel opens it as UTF-8; the game strips it
+}
+function serializeJSON(rows){
+  const out = rows.map(r => {
+    const o = { question: r.question, choices: r.choices.slice(), answer: r.answer };
+    if (r.why) o.why = r.why;
+    o.difficulty = r.difficulty;
+    o.skin = r.skin;
+    if (r.category) o.category = r.category;
+    if (r.id) o.id = r.id;
+    return o;
+  });
+  return JSON.stringify(out, null, 2) + "\n";
+}
+
+/* ---------- working-bank state ---------- */
+let bank = [];   // array of draft objects
+let sel = -1;    // selected index
+let pendingImport = null;
+
+function blankDraft(){
+  return { question:"", choices:["",""], answerIndex:-1, why:"",
+           difficulty:"medium", skin:"both", category:"", id:"" };
+}
+function sanitizeDraft(d){
+  d = (d && typeof d === "object") ? d : {};
+  const s = v => String(v == null ? "" : v);
+  const out = blankDraft();
+  out.question = s(d.question);
+  out.choices = (Array.isArray(d.choices) && d.choices.length) ? d.choices.map(s) : ["", ""];
+  if (out.choices.length > 6) out.choices = out.choices.slice(0, 6);
+  out.answerIndex = (Number.isInteger(d.answerIndex) && d.answerIndex >= 0 && d.answerIndex < out.choices.length)
+    ? d.answerIndex : -1;
+  out.why = s(d.why);
+  out.difficulty = DIFFS.includes(d.difficulty) ? d.difficulty : "medium";
+  out.skin = SKINS.includes(d.skin) ? d.skin : "both";
+  out.category = s(d.category);
+  out.id = s(d.id);
+  return out;
+}
+
+/* Draft -> canonical export row (trimmed; answer = exact text of the selected choice). */
+function draftToRow(d){
+  const choices = d.choices.map(c => c.trim()).filter(c => c !== "");
+  const ansRaw = (d.answerIndex >= 0 && d.choices[d.answerIndex] != null) ? d.choices[d.answerIndex].trim() : "";
+  const ai = choices.findIndex(c => norm(c) === norm(ansRaw));
+  return { question: d.question.trim(), choices, answer: ai >= 0 ? choices[ai] : ansRaw,
+           why: d.why.trim(), difficulty: d.difficulty, skin: d.skin,
+           category: d.category.trim(), id: d.id.trim() };
+}
+
+/* Per-question validation against CONTENT-SCHEMA §6, plus an id-uniqueness check (§2). */
+function bankAnalysis(){
+  const idCounts = {};
+  bank.forEach(d => { const id = norm(d.id); if (id) idCounts[id] = (idCounts[id] || 0) + 1; });
+  return bank.map(d => {
+    const errs = [];
+    if (!d.question.trim()) errs.push("question text is empty");
+    const ch = d.choices.map(c => c.trim()).filter(c => c !== "");
+    if (ch.length < 2) errs.push("needs at least 2 non-empty choices");
+    if (ch.length > 6) errs.push("more than 6 choices");
+    if (new Set(ch.map(norm)).size !== ch.length) errs.push("two choices have the same text");
+    const ansRaw = (d.answerIndex >= 0 && d.choices[d.answerIndex] != null) ? d.choices[d.answerIndex].trim() : "";
+    if (!ansRaw) errs.push("no correct answer selected");
+    const id = norm(d.id);
+    if (id && idCounts[id] > 1) errs.push('id "' + d.id.trim() + '" is used by more than one question');
+    const pipe = ch.some(c => c.indexOf("|") >= 0);
+    return { errs, pipe, valid: errs.length === 0 };
+  });
+}
+
+/* ---------- autosave ---------- */
+function saveDraftStore(){
+  try { localStorage.setItem(DRAFT_LS_KEY, JSON.stringify({ v:1, ts:Date.now(), sel, drafts:bank })); }
+  catch (e){ /* storage unavailable — keep working in memory */ }
+  const st = document.getElementById("stamp");
+  if (st) st.textContent = "Draft saved " + new Date().toLocaleTimeString();
+}
+function loadDraftStore(){
+  try {
+    const raw = localStorage.getItem(DRAFT_LS_KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.drafts)) return false;
+    bank = d.drafts.map(sanitizeDraft);
+    sel = (Number.isInteger(d.sel) && d.sel >= 0 && d.sel < bank.length) ? d.sel : (bank.length ? 0 : -1);
+    return true;
+  } catch (e){ return false; }
+}
+function clearDraftStore(){ try { localStorage.removeItem(DRAFT_LS_KEY); } catch (e){} }
+
+/* ---------- small DOM helpers ---------- */
+const $ = s => document.querySelector(s);
+function el(tag, cls, text){
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function plural(n){ return n === 1 ? "" : "s"; }
+function setStatus(text, kind){
+  const box = $("#status");
+  box.className = "status" + (kind ? " " + kind : "");
+  $("#statusMsg").textContent = text;
+}
+
+/* ---------- section navigation (sidebar) ---------- */
+const VIEWS = ["questions", "import", "export", "readiness", "tips"];
+function showView(v){
+  if (!VIEWS.includes(v)) v = "questions";
+  VIEWS.forEach(name => {
+    const sec = document.getElementById("view-" + name);
+    if (sec) sec.hidden = (name !== v);
+  });
+  document.querySelectorAll(".navitem").forEach(b => {
+    const active = b.dataset.view === v;
+    b.classList.toggle("active", active);
+    if (active) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  if (location.hash !== "#" + v){
+    try { history.replaceState(null, "", "#" + v); } catch (e){ /* some file:// contexts */ }
+  }
+}
+
+/* ---------- rendering: question list ---------- */
+function renderList(analysis){
+  const a = analysis || bankAnalysis();
+  const list = $("#qlist");
+  list.textContent = "";
+  $("#qlistEmpty").hidden = bank.length > 0;
+  bank.forEach((d, i) => {
+    const li = el("li");
+    const row = el("button", "qrow" + (i === sel ? " selected" : ""));
+    row.type = "button";
+    row.setAttribute("aria-label", "Edit question " + (i + 1));
+    const prompt = el("span", "prompt");
+    prompt.appendChild(el("span", "num", "#" + (i + 1) + "  "));
+    const ptext = d.question.trim() ? d.question.replace(/\s+/g, " ") : "(no question text yet)";
+    prompt.appendChild(document.createTextNode(ptext));
+    row.appendChild(prompt);
+    const meta = el("span", "meta");
+    const nCh = d.choices.map(c => c.trim()).filter(c => c !== "").length;
+    meta.appendChild(el("span", "badge", nCh + " choice" + plural(nCh)));
+    meta.appendChild(el("span", "badge d-" + d.difficulty, d.difficulty));
+    meta.appendChild(el("span", "badge skin", d.skin));
+    if (d.category.trim()) meta.appendChild(el("span", "badge cat", d.category.trim()));
+    if (a[i].valid) meta.appendChild(el("span", "badge ok", "✔ valid"));
+    else {
+      const b = el("span", "badge bad", a[i].errs[0]);
+      b.title = a[i].errs.join("; ");
+      meta.appendChild(b);
+    }
+    if (a[i].pipe){
+      const p = el("span", "badge pipe", "| in choice — JSON only");
+      p.title = "CSV uses | to separate choices, so this question is held back from CSV export. JSON export and Install still include it.";
+      meta.appendChild(p);
+    }
+    row.appendChild(meta);
+    row.addEventListener("click", () => { sel = i; renderAll(); });
+    li.appendChild(row);
+
+    const btns = el("span", "rowbtns");
+    const dup = el("button", "small quiet", "⧉");
+    dup.type = "button"; dup.title = "Duplicate question " + (i + 1);
+    dup.setAttribute("aria-label", "Duplicate question " + (i + 1));
+    dup.addEventListener("click", () => {
+      const copy = sanitizeDraft(JSON.parse(JSON.stringify(d)));
+      copy.id = ""; // ids must be unique — the copy starts without one
+      bank.splice(i + 1, 0, copy);
+      sel = i + 1;
+      saveDraftStore(); renderAll();
+      setStatus("Duplicated question #" + (i + 1) + " (the copy has no id — ids must be unique).", "ok");
+    });
+    const del = el("button", "small danger", "✕");
+    del.type = "button"; del.title = "Delete question " + (i + 1);
+    del.setAttribute("aria-label", "Delete question " + (i + 1));
+    del.addEventListener("click", () => {
+      if (!confirm("Delete question #" + (i + 1) + "?")) return;
+      bank.splice(i, 1);
+      if (sel >= bank.length) sel = bank.length - 1;
+      saveDraftStore(); renderAll();
+      setStatus("Deleted question #" + (i + 1) + ".", "ok");
+    });
+    btns.appendChild(dup); btns.appendChild(del);
+    li.appendChild(btns);
+    list.appendChild(li);
+  });
+}
+
+/* ---------- rendering: readiness ---------- */
+function renderReadiness(analysis){
+  const a = analysis || bankAnalysis();
+  const validRows = bank.filter((d, i) => a[i].valid).map(draftToRow);
+  const invalid = bank.length - validRows.length;
+  const theory = validRows.filter(r => r.skin === "theory" || r.skin === "both").length;
+  const onboarding = validRows.filter(r => r.skin === "onboarding" || r.skin === "both").length;
+  const diffs = { easy:0, medium:0, hard:0 };
+  validRows.forEach(r => diffs[r.difficulty]++);
+
+  const box = $("#readinessBody");
+  box.textContent = "";
+  const ul = el("ul");
+  const line = (lampCls, textNodeCls, text) => {
+    const li = el("li");
+    li.appendChild(el("span", "lamp " + lampCls));
+    li.appendChild(el("span", textNodeCls || "", text));
+    ul.appendChild(li);
+  };
+  line(invalid ? "a" : "g", invalid ? "warn" : "",
+    bank.length + " question" + plural(bank.length) + " in the working bank — " +
+    validRows.length + " valid" + (invalid ? ", " + invalid + " need" + (invalid === 1 ? "s" : "") + " attention" : ""));
+  line(validRows.length >= GAME_MIN ? "g" : "r", validRows.length >= GAME_MIN ? "" : "bad",
+    validRows.length >= GAME_MIN
+      ? "Meets the game's minimum of " + GAME_MIN + " valid questions"
+      : "Below the game's minimum of " + GAME_MIN + " valid questions — the game will reject this bank and keep its current one");
+  line(theory >= GAME_MIN ? "g" : "a", theory >= GAME_MIN ? "" : "warn",
+    "Theory pool: " + theory + (theory >= GAME_MIN ? "" : " — under " + GAME_MIN + "; add questions with skin “theory” or “both”"));
+  line(onboarding >= GAME_MIN ? "g" : "a", onboarding >= GAME_MIN ? "" : "warn",
+    "Onboarding pool: " + onboarding + (onboarding >= GAME_MIN ? "" : " — under " + GAME_MIN + "; add questions with skin “onboarding” or “both”"));
+  line("m", "", "Difficulty mix: " + diffs.easy + " easy · " + diffs.medium + " medium · " + diffs.hard + " hard");
+  box.appendChild(ul);
+  box.appendChild(el("p", "foot",
+    "A question with skin “both” counts toward both pools. Normal waves prefer easy/medium questions; boss waves prefer medium/hard."));
+
+  // compact always-visible bank-health chip in the sidebar
+  const dot = document.getElementById("chipDot"), txt = document.getElementById("chipText");
+  if (dot && txt){
+    dot.className = "dot " + (validRows.length < GAME_MIN ? "r"
+      : (theory < GAME_MIN || onboarding < GAME_MIN ? "a" : "g"));
+    txt.textContent = validRows.length + " valid · theory " + theory + " / onboarding " + onboarding;
+  }
+}
+
+/* ---------- rendering: editor ---------- */
+function renderEditor(){
+  const box = $("#editorBody");
+  box.textContent = "";
+  $("#editorPos").textContent = (sel >= 0 && bank[sel]) ? ("#" + (sel + 1) + " of " + bank.length) : "";
+  if (sel < 0 || !bank[sel]){
+    box.appendChild(el("p", "placeholder",
+      "Select a question on the left, or click “+ Add question” to start writing."));
+    return;
+  }
+  const d = bank[sel];
+
+  // question prompt
+  const lq = el("label", null, "Question prompt (shown to the player)"); lq.htmlFor = "fQuestion";
+  const tq = document.createElement("textarea");
+  tq.id = "fQuestion"; tq.rows = 3; tq.value = d.question;
+  tq.placeholder = "e.g. A bathroom receptacle requires which device?";
+  tq.addEventListener("input", () => { d.question = tq.value; onEdit(); });
+  box.appendChild(lq); box.appendChild(tq);
+
+  // choices
+  const fs = el("fieldset");
+  fs.appendChild(el("legend", null, "Choices (2–6) — select the radio button next to the correct answer"));
+  d.choices.forEach((c, i) => {
+    const row = el("div", "choicerow");
+    const radio = document.createElement("input");
+    radio.type = "radio"; radio.name = "correctChoice"; radio.checked = d.answerIndex === i;
+    radio.setAttribute("aria-label", "Mark choice " + (i + 1) + " as the correct answer");
+    radio.title = "Correct answer";
+    radio.addEventListener("change", () => { d.answerIndex = i; onEdit(); });
+    const txt = document.createElement("input");
+    txt.type = "text"; txt.value = c;
+    txt.placeholder = "Choice " + (i + 1);
+    txt.setAttribute("aria-label", "Choice " + (i + 1) + " text");
+    txt.addEventListener("input", () => { d.choices[i] = txt.value; onEdit(); });
+    const rm = el("button", "small danger del", "✕");
+    rm.type = "button"; rm.title = "Remove choice " + (i + 1);
+    rm.setAttribute("aria-label", "Remove choice " + (i + 1));
+    rm.disabled = d.choices.length <= 2;
+    rm.addEventListener("click", () => {
+      d.choices.splice(i, 1);
+      if (d.answerIndex === i) d.answerIndex = -1;
+      else if (d.answerIndex > i) d.answerIndex--;
+      onEdit(true);
+    });
+    row.appendChild(radio); row.appendChild(txt); row.appendChild(rm);
+    fs.appendChild(row);
+  });
+  const addc = el("button", "small", "+ Add choice");
+  addc.type = "button";
+  addc.disabled = d.choices.length >= 6;
+  addc.title = d.choices.length >= 6 ? "Maximum of 6 choices" : "Add another choice";
+  addc.addEventListener("click", () => { d.choices.push(""); onEdit(true); });
+  fs.appendChild(addc);
+  box.appendChild(fs);
+
+  // why
+  const lw = el("label", null, "Why (optional) — one-line explanation shown after the player answers"); lw.htmlFor = "fWhy";
+  const tw = document.createElement("input");
+  tw.type = "text"; tw.id = "fWhy"; tw.value = d.why;
+  tw.placeholder = "e.g. NEC requires GFCI at wet locations";
+  tw.addEventListener("input", () => { d.why = tw.value; onEdit(); });
+  box.appendChild(lw); box.appendChild(tw);
+
+  // difficulty / skin
+  const g1 = el("div", "formgrid");
+  const dv1 = el("div");
+  const ld = el("label", null, "Difficulty"); ld.htmlFor = "fDifficulty";
+  const sd = document.createElement("select"); sd.id = "fDifficulty";
+  DIFFS.forEach(v => { const o = el("option", null, v); o.value = v; sd.appendChild(o); });
+  sd.value = d.difficulty;
+  sd.addEventListener("change", () => { d.difficulty = sd.value; onEdit(); });
+  dv1.appendChild(ld); dv1.appendChild(sd);
+  const dv2 = el("div");
+  const ls = el("label", null, "Skin (audience)"); ls.htmlFor = "fSkin";
+  const ss = document.createElement("select"); ss.id = "fSkin";
+  SKINS.forEach(v => { const o = el("option", null, v === "both" ? "both (default)" : v); o.value = v; ss.appendChild(o); });
+  ss.value = d.skin;
+  ss.addEventListener("change", () => { d.skin = ss.value; onEdit(); });
+  dv2.appendChild(ls); dv2.appendChild(ss);
+  g1.appendChild(dv1); g1.appendChild(dv2);
+  box.appendChild(g1);
+
+  // category / id
+  const g2 = el("div", "formgrid");
+  const cv1 = el("div");
+  const lc = el("label", null, "Category (optional — e.g. OCP, GBF, PDS)"); lc.htmlFor = "fCategory";
+  const tc = document.createElement("input");
+  tc.type = "text"; tc.id = "fCategory"; tc.value = d.category; tc.setAttribute("list", "catList");
+  tc.placeholder = "free text or a schema code";
+  tc.addEventListener("input", () => { d.category = tc.value; onEdit(); });
+  cv1.appendChild(lc); cv1.appendChild(tc);
+  const cv2 = el("div");
+  const li2 = el("label", null, "Id (optional — must be unique; blank lets the game assign one)"); li2.htmlFor = "fId";
+  const ti = document.createElement("input");
+  ti.type = "text"; ti.id = "fId"; ti.value = d.id;
+  ti.placeholder = "e.g. gfci-bathroom-1";
+  ti.addEventListener("input", () => { d.id = ti.value; onEdit(); });
+  cv2.appendChild(li2); cv2.appendChild(ti);
+  g2.appendChild(cv1); g2.appendChild(cv2);
+  box.appendChild(g2);
+
+  // validity readout
+  const errBox = el("div"); errBox.id = "fErrors";
+  box.appendChild(errBox);
+  renderEditorErrors();
+
+  // actions
+  const acts = el("div", "editactions");
+  const dupB = el("button", "quiet", "⧉ Duplicate this question");
+  dupB.type = "button";
+  dupB.addEventListener("click", () => {
+    const copy = sanitizeDraft(JSON.parse(JSON.stringify(d)));
+    copy.id = "";
+    bank.splice(sel + 1, 0, copy);
+    sel = sel + 1;
+    saveDraftStore(); renderAll();
+  });
+  const delB = el("button", "danger", "✕ Delete this question");
+  delB.type = "button";
+  delB.addEventListener("click", () => {
+    if (!confirm("Delete question #" + (sel + 1) + "?")) return;
+    bank.splice(sel, 1);
+    if (sel >= bank.length) sel = bank.length - 1;
+    saveDraftStore(); renderAll();
+  });
+  acts.appendChild(dupB); acts.appendChild(delB);
+  box.appendChild(acts);
+}
+
+function renderEditorErrors(){
+  const errBox = document.getElementById("fErrors");
+  if (!errBox || sel < 0 || !bank[sel]) return;
+  const a = bankAnalysis()[sel];
+  errBox.textContent = "";
+  if (a.valid){
+    errBox.className = "good";
+    errBox.appendChild(document.createTextNode("✔ Valid — this question will be included in exports and installs."));
+  } else {
+    errBox.className = "bad";
+    errBox.appendChild(document.createTextNode("Not yet valid — it stays in the list but is held back from exports:"));
+    const ul = el("ul");
+    a.errs.forEach(e => ul.appendChild(el("li", null, e)));
+    errBox.appendChild(ul);
+  }
+  if (a.pipe){
+    errBox.appendChild(el("span", "pipenote",
+      "Note: a choice contains “|”, which CSV uses to separate choices. This question is held back from CSV export — JSON export and Install into game still include it."));
+  }
+}
+
+/* ---------- rendering: in-game preview ---------- */
+function renderPreview(){
+  const box = $("#preview");
+  box.textContent = "";
+  if (sel < 0 || !bank[sel]){
+    box.appendChild(el("p", "placeholder", "Select a question to see it exactly as players will."));
+    return;
+  }
+  const d = bank[sel];
+  const a = bankAnalysis()[sel];
+  const row = draftToRow(d);
+  const card = el("div", "qcard");
+  card.appendChild(el("div", "wavehead",
+    "WAVE PREVIEW — normal wave (+12g if correct, no penalty)"));
+  card.appendChild(el("p", "prompt", row.question || "(no question text yet)"));
+
+  const choices = row.choices.length ? row.choices : ["(choice 1)", "(choice 2)"];
+  const btns = [];
+  choices.forEach((c) => {
+    const b = el("button", "qchoice", c);
+    b.type = "button";
+    if (a.valid && norm(c) === norm(row.answer)){
+      b.appendChild(el("span", "ctag", "✓ answer"));
+    }
+    btns.push(b);
+    card.appendChild(b);
+  });
+
+  const after = el("div");
+  card.appendChild(after);
+
+  if (a.valid){
+    btns.forEach((b, i) => b.addEventListener("click", () => {
+      if (card.classList.contains("answered")) return;
+      card.classList.add("answered");
+      const picked = choices[i];
+      const correct = norm(picked) === norm(row.answer);
+      btns.forEach((bb, j) => {
+        if (norm(choices[j]) === norm(row.answer)) bb.classList.add("reveal-ok");
+        else if (j === i) bb.classList.add("reveal-bad");
+        bb.disabled = true;
+      });
+      const res = el("div", "qresult " + (correct ? "good" : "bad"));
+      res.appendChild(el("div", "head",
+        correct ? "✔ Correct  +12 gold" : "✘ Not quite — the answer is: " + row.answer));
+      if (row.why) res.appendChild(el("div", "why", "Why: " + row.why));
+      const again = el("button", null, "Preview again ↺");
+      again.type = "button";
+      again.addEventListener("click", renderPreview);
+      res.appendChild(again);
+      after.appendChild(res);
+    }));
+  }
+  box.appendChild(card);
+  if (!a.valid){
+    box.appendChild(el("p", "prevnote",
+      "This question is incomplete (" + a.errs.join("; ") + ") — the preview is not clickable until it is valid."));
+  }
+}
+
+/* ---------- change plumbing ---------- */
+function onEdit(structureChanged){
+  saveDraftStore();
+  const a = bankAnalysis();
+  renderList(a);
+  renderReadiness(a);
+  renderPreview();
+  if (structureChanged) renderEditor();
+  else renderEditorErrors();
+  $("#editorPos").textContent = (sel >= 0 && bank[sel]) ? ("#" + (sel + 1) + " of " + bank.length) : "";
+}
+function renderAll(){
+  const a = bankAnalysis();
+  renderList(a);
+  renderReadiness(a);
+  renderEditor();
+  renderPreview();
+}
+
+/* ---------- toolbar actions ---------- */
+function fname(ext){
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return "grid-defense-questions-" + d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "." + ext;
+}
+function download(name, text, mime){
+  const blob = new Blob([text], { type: mime });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function exportCSV(){
+  const a = bankAnalysis();
+  const rows = [], held = [], pipeHeld = [];
+  bank.forEach((d, i) => {
+    if (!a[i].valid) held.push("#" + (i + 1));
+    else if (a[i].pipe) pipeHeld.push("#" + (i + 1));
+    else rows.push(draftToRow(d));
+  });
+  if (!rows.length){ setStatus("Nothing to export — no questions are currently valid for CSV.", "err"); return; }
+  download(fname("csv"), serializeCSV(rows), "text/csv;charset=utf-8");
+  let msg = "Exported " + rows.length + " question" + plural(rows.length) + " to CSV.";
+  let kind = "ok";
+  if (held.length){ msg += " Held back " + held.length + " invalid (" + held.join(", ") + ")."; kind = "warn"; }
+  if (pipeHeld.length){
+    msg += " Held back " + pipeHeld.length + " containing “|” in a choice (" + pipeHeld.join(", ") +
+           ") — CSV uses | as the choice separator; use Export JSON for those.";
+    kind = "warn";
+  }
+  setStatus(msg, kind);
+}
+
+function exportJSON(){
+  const a = bankAnalysis();
+  const rows = [], held = [];
+  bank.forEach((d, i) => { if (a[i].valid) rows.push(draftToRow(d)); else held.push("#" + (i + 1)); });
+  if (!rows.length){ setStatus("Nothing to export — no questions are currently valid.", "err"); return; }
+  download(fname("json"), serializeJSON(rows), "application/json;charset=utf-8");
+  let msg = "Exported " + rows.length + " question" + plural(rows.length) + " to JSON.";
+  if (held.length) msg += " Held back " + held.length + " invalid (" + held.join(", ") + ").";
+  setStatus(msg, held.length ? "warn" : "ok");
+}
+
+function installToGame(){
+  const a = bankAnalysis();
+  const rows = [], held = [];
+  bank.forEach((d, i) => { if (a[i].valid) rows.push(draftToRow(d)); else held.push("#" + (i + 1)); });
+  if (rows.length < GAME_MIN){
+    setStatus("The game only accepts a bank with at least " + GAME_MIN + " valid questions (you have " +
+      rows.length + "). Nothing was installed.", "err");
+    return;
+  }
+  // Store in the exact validated shape the game reads back from localStorage.
+  const questions = [];
+  for (let i = 0; i < rows.length; i++){
+    const res = validateRow(rows[i], i);
+    if (res.skip){ setStatus("Internal check failed on question " + (i + 1) + ": " + res.skip, "err"); return; }
+    questions.push(res.q);
+  }
+  let stored = false;
+  try {
+    localStorage.setItem(GAME_LS_KEY, JSON.stringify({
+      questions, source: "Instructor Tool", count: questions.length, ts: Date.now(),
+    }));
+    stored = true;
+  } catch (e){}
+  if (!stored){ setStatus("Could not write to this browser's storage — the bank was not installed.", "err"); return; }
+  let msg = "Installed " + questions.length + " question" + plural(questions.length) +
+    " into Grid Defense (this browser). The game picks it up at its menu on next load.";
+  if (held.length) msg += " Held back " + held.length + " invalid (" + held.join(", ") + ").";
+  setStatus(msg, held.length ? "warn" : "ok");
+}
+
+function loadGameBank(){
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(GAME_LS_KEY) || "null"); } catch (e){}
+  if (!stored || !Array.isArray(stored.questions) || !stored.questions.length){
+    setStatus("No uploaded bank found in this browser — the game is currently using its bundled sample questions.", "warn");
+    return;
+  }
+  if (bank.length && !confirm("Replace the current working bank (" + bank.length + " question" + plural(bank.length) +
+      ") with the game's stored bank (" + stored.questions.length + ")?")) return;
+  bank = stored.questions.map(q => {
+    const d = sanitizeDraft(q);
+    if (d.answerIndex < 0 && q && q.answer != null){
+      d.answerIndex = d.choices.findIndex(c => norm(c) === norm(q.answer));
+    }
+    return d;
+  });
+  sel = bank.length ? 0 : -1;
+  pendingImport = null; hideImportPanel();
+  saveDraftStore(); renderAll();
+  setStatus("Loaded " + bank.length + " question" + plural(bank.length) + " from the game's stored bank (source: " +
+    (stored.source || "unknown") + ").", "ok");
+}
+
+function newBank(){
+  if (bank.length && !confirm("Start a new empty bank? This discards the current working draft (" +
+      bank.length + " question" + plural(bank.length) + ") from this browser.")) return;
+  bank = []; sel = -1; pendingImport = null;
+  clearDraftStore(); hideImportPanel();
+  renderAll();
+  setStatus("Started a new empty bank.", "ok");
+}
+
+/* ---------- import flow ---------- */
+function hideImportPanel(){ const p = $("#importPanel"); p.hidden = true; p.textContent = ""; }
+
+function renderImportPanel(){
+  const p = $("#importPanel");
+  p.textContent = "";
+  if (!pendingImport){ p.hidden = true; return; }
+  const { drafts, skipped, name } = pendingImport;
+  p.hidden = false;
+  const h = el("h2", null, "Import summary — ");
+  h.appendChild(el("span", "mono", name)); // file names render in the mono stack
+  p.appendChild(h);
+  p.appendChild(el("div", null,
+    "Loaded " + drafts.length + " question" + plural(drafts.length) + " · skipped " + skipped.length + "."));
+  if (skipped.length){
+    const sk = el("div", "skips");
+    skipped.forEach(s => sk.appendChild(el("div", null, "Row " + s.row + ": " + s.reason)));
+    p.appendChild(sk);
+    p.appendChild(el("div", "hint",
+      "Row numbers count data rows only (the CSV header row is not counted). Fix these in the source file and re-import, or continue with the loaded rows."));
+  }
+  const acts = el("div", "acts");
+  if (drafts.length){
+    const rep = el("button", "primary", bank.length ? "Replace working bank" : "Load " + drafts.length + " question" + plural(drafts.length));
+    rep.type = "button";
+    rep.addEventListener("click", () => {
+      bank = drafts.map(sanitizeDraft);
+      sel = bank.length ? 0 : -1;
+      pendingImport = null; hideImportPanel();
+      saveDraftStore(); renderAll();
+      setStatus("Imported " + bank.length + " question" + plural(bank.length) + " from " + name +
+        (skipped.length ? " (" + skipped.length + " skipped)." : "."), skipped.length ? "warn" : "ok");
+    });
+    acts.appendChild(rep);
+    if (bank.length){
+      const app = el("button", null, "Append to working bank");
+      app.type = "button";
+      app.addEventListener("click", () => {
+        bank = bank.concat(drafts.map(sanitizeDraft));
+        sel = bank.length - drafts.length; // first appended question
+        pendingImport = null; hideImportPanel();
+        saveDraftStore(); renderAll();
+        setStatus("Appended " + drafts.length + " question" + plural(drafts.length) + " from " + name +
+          (skipped.length ? " (" + skipped.length + " skipped)." : "."), skipped.length ? "warn" : "ok");
+      });
+      acts.appendChild(app);
+    }
+  }
+  const cancel = el("button", "quiet", "Cancel");
+  cancel.type = "button";
+  cancel.addEventListener("click", () => { pendingImport = null; hideImportPanel(); setStatus("Import cancelled.", "ok"); });
+  acts.appendChild(cancel);
+  p.appendChild(acts);
+  p.scrollIntoView({ block: "nearest" });
+  const firstBtn = acts.querySelector("button");
+  if (firstBtn) firstBtn.focus();
+}
+
+function beginImport(text, name){
+  const res = importText(text, name);
+  if (!res.ok){
+    pendingImport = null; hideImportPanel();
+    setStatus("Could not read " + name + " — " + res.error, "err");
+    return;
+  }
+  pendingImport = { drafts: res.drafts, skipped: res.skipped, name };
+  showView("import"); // the summary lives in the Import section, wherever the file was dropped
+  renderImportPanel();
+}
+
+function handleFile(file){
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => beginImport(String(reader.result), file.name);
+  reader.onerror = () => setStatus("Could not read the file.", "err");
+  reader.readAsText(file, "UTF-8");
+}
+
+/* ---------- init ---------- */
+function init(){
+  $("#btnNew").addEventListener("click", newBank);
+  $("#btnImport").addEventListener("click", () => $("#qfile").click());
+  $("#btnLoadGame").addEventListener("click", loadGameBank);
+  $("#btnExportCsv").addEventListener("click", exportCSV);
+  $("#btnExportJson").addEventListener("click", exportJSON);
+  $("#btnInstall").addEventListener("click", installToGame);
+  $("#btnAdd").addEventListener("click", () => {
+    bank.push(blankDraft());
+    sel = bank.length - 1;
+    saveDraftStore(); renderAll();
+    const tq = document.getElementById("fQuestion");
+    if (tq) tq.focus();
+  });
+  $("#qfile").addEventListener("change", e => {
+    handleFile(e.target.files && e.target.files[0]);
+    e.target.value = "";
+  });
+
+  // drag & drop anywhere on the page
+  let dragDepth = 0;
+  const dz = $("#dropzone");
+  window.addEventListener("dragenter", e => {
+    if (e.dataTransfer && Array.prototype.includes.call(e.dataTransfer.types, "Files")){
+      dragDepth++; dz.classList.add("show");
+    }
+  });
+  window.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) dz.classList.remove("show");
+  });
+  window.addEventListener("dragover", e => e.preventDefault());
+  window.addEventListener("drop", e => {
+    e.preventDefault();
+    dragDepth = 0; dz.classList.remove("show");
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+
+  // sidebar navigation (deep-linkable via #questions / #import / #export / #readiness / #tips)
+  document.querySelectorAll(".navitem").forEach(b =>
+    b.addEventListener("click", () => showView(b.dataset.view)));
+  window.addEventListener("hashchange", () => showView(location.hash.replace("#", "")));
+  showView(location.hash.replace("#", "") || "questions");
+
+  loadDraftStore();
+  renderAll();
+  if (bank.length){
+    setStatus("Restored your autosaved draft (" + bank.length + " question" + plural(bank.length) + ").", "ok");
+  }
+  if (/[?&]selftest=1/.test(location.search)) runSelfTest();
+  if (/[?&]domtest=1/.test(location.search)) runDomTest();
+}
+
+/* ============================================================
+   SELF-TEST HARNESS (?selftest=1) — round-trips the serializer
+   and parser on tricky content and checks the game's rules.
+   Read-only: it never writes to localStorage.
+   ============================================================ */
+function runSelfTest(){
+  const res = [];
+  const t = (name, pass, detail) => res.push({ name, pass: !!pass, detail: detail || "" });
+  try {
+    const trickyDrafts = [
+      { question: 'He said "trip, then reset", right?\nLine 2 with Ω, ∞, µF and 中文 …',
+        choices: ['Yes, "quoted, twice"', 'No — never', 'Maybe; later'], answerIndex: 0,
+        why: 'Why with, comma "quotes"\nand a newline', difficulty: 'hard', skin: 'theory',
+        category: 'OCP, special', id: 'trick-1' },
+      { question: 'Deux choix — unicode ✓', choices: ['Vrai', 'Faux'], answerIndex: 1,
+        why: '', difficulty: 'easy', skin: 'onboarding', category: '', id: '' },
+      { question: 'Six choices is the maximum', choices: ['A', 'B', 'C', 'D', 'E', 'F'], answerIndex: 5,
+        why: 'six is the cap', difficulty: 'medium', skin: 'both', category: 'GBF', id: 'six' },
+    ].map(sanitizeDraft);
+    const rows1 = trickyDrafts.map(draftToRow);
+
+    // CSV round-trip through the game's parser rules
+    const csv1 = serializeCSV(rows1);
+    const imp = importText(csv1, 'roundtrip.csv');
+    t('CSV: tricky export imports with 0 skipped', imp.ok && imp.skipped.length === 0,
+      imp.ok ? JSON.stringify(imp.skipped) : imp.error);
+    const rows2 = (imp.drafts || []).map(draftToRow);
+    t('CSV: bank identical after round-trip (commas, quotes, newline, unicode, 6 choices)',
+      JSON.stringify(rows1) === JSON.stringify(rows2));
+    t('CSV: byte-identical on re-export', csv1 === serializeCSV(rows2));
+
+    // JSON round-trip
+    const json1 = serializeJSON(rows1);
+    const impJ = importText(json1, 'roundtrip.json');
+    const rowsJ = (impJ.drafts || []).map(draftToRow);
+    t('JSON: bank identical after round-trip', impJ.ok && JSON.stringify(rows1) === JSON.stringify(rowsJ),
+      impJ.ok ? '' : impJ.error);
+    t('JSON: byte-identical on re-export', json1 === serializeJSON(rowsJ));
+
+    // Game validation rules
+    const bad = importText(
+      'question,choices,answer\nQ1,A|a,A\nQ2,A|B|C|D|E|F|G,A\nQ3,A|B,C\nQ4,A|B,  a \n,A|B,A\nQ6,A|B,B', 'bad.csv');
+    t('Rules: duplicate choices / 7 choices / no-match answer / empty question all skipped',
+      bad.ok && bad.skipped.length === 4, bad.ok ? JSON.stringify(bad.skipped) : bad.error);
+    t('Rules: the 2 valid rows load', bad.ok && bad.drafts.length === 2);
+    t('Rules: case/whitespace-insensitive answer normalized to exact choice text',
+      bad.ok && bad.drafts.length === 2 && draftToRow(bad.drafts[0]).answer === 'A');
+
+    const enums = importText(
+      'question,choices,answer,difficulty,skin\nQ,A|B,A,hardd,\nQ2,A|B,B,,theoryy\nQ3,A|B,B,HARD,Theory', 'e.csv');
+    t('Rules: invalid enum skipped; case-insensitive enum accepted',
+      enums.ok && enums.skipped.length === 2 && enums.drafts.length === 1 &&
+      enums.drafts[0].difficulty === 'hard' && enums.drafts[0].skin === 'theory',
+      enums.ok ? JSON.stringify(enums.skipped) : enums.error);
+
+    const hdr = importText('ANSWER,Question,CHOICES\nB,Q,A|B', 'h.csv');
+    t('Rules: CSV header case- and order-insensitive',
+      hdr.ok && hdr.drafts.length === 1 && draftToRow(hdr.drafts[0]).answer === 'B');
+
+    const wrap = importText('{"questions":[{"question":"Q","choices":["A","B"],"answer":"b"}]}', 'w.json');
+    t('Rules: JSON {questions:[...]} wrapper accepted',
+      wrap.ok && wrap.drafts.length === 1 && draftToRow(wrap.drafts[0]).answer === 'B');
+  } catch (e){
+    t('selftest crashed', false, String((e && e.stack) || e));
+  }
+  t('zero uncaught page errors', ERRS.length === 0, ERRS.join(' | '));
+
+  const fails = res.filter(r => !r.pass);
+  document.title = fails.length ? 'SELFTEST FAIL (' + fails.length + ')' : 'SELFTEST PASS (' + res.length + ')';
+  const pre = document.createElement('pre');
+  pre.id = 'selftest';
+  pre.textContent = res.map(r =>
+    (r.pass ? 'PASS' : 'FAIL') + '  ' + r.name + (r.detail && !r.pass ? '  :: ' + r.detail : '')
+  ).join('\n') + '\nRESULT: ' + (fails.length ? 'FAIL' : 'PASS');
+  pre.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;background:#172642;' +
+    'border:1px solid #2DD4BF;color:#F1F5F9;padding:10px;max-width:90vw;max-height:50vh;overflow:auto;' +
+    'font-size:11px;font-family:Consolas,monospace';
+  document.body.appendChild(pre);
+}
+
+/* ============================================================
+   DOM TEST HARNESS (?domtest=1) — drives the real UI through
+   every sidebar section: add a question, import, export CSV
+   (download stubbed), install into the game's storage key.
+   Snapshots and restores localStorage so it leaves no trace.
+   ============================================================ */
+function runDomTest(){
+  const res = [];
+  const t = (name, pass, detail) => res.push({ name, pass: !!pass, detail: detail || "" });
+  const savedDraft = localStorage.getItem(DRAFT_LS_KEY);
+  const savedGame  = localStorage.getItem(GAME_LS_KEY);
+  const origDownload = download;
+  try {
+    // every nav section reachable, one visible at a time
+    VIEWS.forEach(v => {
+      showView(v);
+      t("nav: section '" + v + "' shown alone",
+        !document.getElementById("view-" + v).hidden &&
+        VIEWS.every(o => o === v || document.getElementById("view-" + o).hidden));
+    });
+    showView("questions");
+    // add a question through the real button
+    bank = []; sel = -1; renderAll();
+    document.getElementById("btnAdd").click();
+    t("questions: add question creates a draft and opens the editor",
+      bank.length === 1 && !!document.getElementById("fQuestion"));
+    // import a 6-row bank through the real flow (switches to Import, shows summary)
+    const csv = 'question,choices,answer,why,difficulty,skin,category\n' +
+      '"Q one, with comma",A|B|C,B,because,easy,theory,OCP\nQ2,A|B,A,,medium,onboarding,\n' +
+      'Q3,A|B,B,,easy,both,\nQ4,A|B,A,,hard,both,\nQ5,A|B,B,,medium,theory,\nQ6,A|B,A,,easy,onboarding,';
+    beginImport(csv, "domtest.csv");
+    t("import: summary shown in the Import section",
+      !document.getElementById("view-import").hidden && !document.getElementById("importPanel").hidden);
+    const rep = document.querySelector("#importPanel .acts button");
+    if (rep) rep.click(); // "Replace working bank"
+    t("import: replace loads all 6 rows", bank.length === 6);
+    t("chip: sidebar summary reflects the bank",
+      /6 valid/.test(document.getElementById("chipText").textContent));
+    // export CSV via the real button, download stubbed
+    let got = null;
+    download = (n, text, mime) => { got = { n, text, mime }; };
+    showView("export");
+    document.getElementById("btnExportCsv").click();
+    const reimp = got ? importText(got.text, got.n) : { ok:false };
+    t("export: CSV downloads and re-imports 6/6 through game rules",
+      !!got && /\.csv$/.test(got.n) && reimp.ok && reimp.drafts.length === 6 && reimp.skipped.length === 0,
+      got ? JSON.stringify((reimp.skipped || [])) : "no download captured");
+    // install into the game's storage key
+    document.getElementById("btnInstall").click();
+    let inst = null;
+    try { inst = JSON.parse(localStorage.getItem(GAME_LS_KEY)); } catch (e){}
+    t("install: game key holds 6 validated questions from 'Instructor Tool'",
+      !!inst && inst.count === 6 && inst.source === "Instructor Tool" &&
+      Array.isArray(inst.questions) && inst.questions.length === 6 &&
+      typeof inst.questions[0].answerIndex === "number" &&
+      typeof inst.questions[0].diffExplicit === "boolean");
+  } catch (e){
+    t("domtest crashed", false, String((e && e.stack) || e));
+  }
+  // restore everything the test touched
+  download = origDownload;
+  try {
+    if (savedDraft == null) localStorage.removeItem(DRAFT_LS_KEY); else localStorage.setItem(DRAFT_LS_KEY, savedDraft);
+    if (savedGame == null) localStorage.removeItem(GAME_LS_KEY); else localStorage.setItem(GAME_LS_KEY, savedGame);
+  } catch (e){}
+  bank = []; sel = -1; loadDraftStore(); renderAll(); showView("questions");
+  t("zero uncaught page errors", ERRS.length === 0, ERRS.join(" | "));
+
+  const fails = res.filter(r => !r.pass);
+  document.title = fails.length ? "DOMTEST FAIL (" + fails.length + ")" : "DOMTEST PASS (" + res.length + ")";
+  const pre = document.createElement("pre");
+  pre.id = "domtest";
+  pre.textContent = res.map(r =>
+    (r.pass ? "PASS" : "FAIL") + "  " + r.name + (r.detail && !r.pass ? "  :: " + r.detail : "")
+  ).join("\n") + "\nRESULT: " + (fails.length ? "FAIL" : "PASS");
+  pre.style.cssText = "position:fixed;right:8px;bottom:8px;z-index:99;background:#172642;" +
+    "border:1px solid #2DD4BF;color:#F1F5F9;padding:10px;max-width:90vw;max-height:50vh;overflow:auto;" +
+    "font-size:11px;font-family:Consolas,monospace";
+  document.body.appendChild(pre);
+}
+
+init();
+</script>
+</body>
+</html>
