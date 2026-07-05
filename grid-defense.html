@@ -1105,7 +1105,6 @@ class MenuScene extends Phaser.Scene {
     add(T(this, pnX + pnW/2, iy + 28, "MAP " + (this.mapIdx + 1) + "/" + MAPS.length + " · " + bestLine, 11, PAL.muted).setOrigin(0.5, 0));
     add(T(this, pnX + pnW/2, iy + 50, (G.mapOverride && map.unlock > p.level ? "URL preview · " : "") + map.blurb, 11, PAL.muted,
       { wordWrap:{ width: pnW - 44 }, align:"center", lineSpacing: 3 }).setOrigin(0.5, 0));
-    add(T(this, pnX + pnW/2, pnY + pnH + 12, "?skin=onboarding · ?map=<id> open a skin or map directly", 9, PAL.muted).setOrigin(0.5, 0));
 
     /* right stack — actions */
     const rx = 690, rw = 310;
@@ -1126,7 +1125,7 @@ class MenuScene extends Phaser.Scene {
       if (locked) sb.setDisabled(true);
       yy += 8; // small extra breather under the primary action
     }
-    row(44, cy => add(makeButton(this, rx, cy, rw, 44, "QUESTION BANK", 13, () => this.openBank())));
+    row(44, cy => add(makeButton(this, rx, cy, rw, 44, "UPLOAD QUESTIONS", 13, () => this.openBank())));
     row(44, cy => add(makeButton(this, rx, cy, rw, 44, "STATS", 13, () => this.showStats())));
     row(40, cy => add(makeButton(this, rx, cy, rw, 40,
       "MODE: " + (G.mode === "endless" ? "ENDLESS ∞" : "CAMPAIGN"), 12, () => {
@@ -1137,7 +1136,7 @@ class MenuScene extends Phaser.Scene {
       ? "Waves keep escalating — how deep can you hold?"
       : BAL.waves + " waves · boss every 5th", 11, PAL.muted).setOrigin(0.5, 0));
     yy += 18;
-    row(40, cy => add(makeButton(this, rx, cy, rw, 40, "SKIN: " + c.skinLabel.toUpperCase(), 12, () => {
+    row(40, cy => add(makeButton(this, rx, cy, rw, 40, "LEARNING TRACK: " + c.skinLabel.toUpperCase(), 12, () => {
       G.skin = G.skin === "theory" ? "onboarding" : "theory";
       Profile.setPref("skin", G.skin); this.render();
     })));
@@ -1162,12 +1161,9 @@ class MenuScene extends Phaser.Scene {
     const mastered = Profile.masteredCount(BankState.questions);
     add(T(this, W/2 + 40, H - 30, "★ " + mastered + " / " + BankState.questions.length +
       " mastered · best score " + p.life.bestScore, 11, PAL.muted).setOrigin(0.5, 0));
-    add(T(this, W - 150, H - 30, "Sound: " + (G.muted ? "off" : "on"), 11, PAL.muted).setOrigin(1, 0)
+    add(T(this, W - 20, H - 30, "Sound: " + (G.muted ? "off" : "on"), 11, PAL.muted).setOrigin(1, 0)
       .setInteractive({ useHandCursor: true })
       .on("pointerup", () => { G.muted = !G.muted; Profile.setPref("muted", G.muted); this.render(); }));
-    add(T(this, W - 20, H - 30, "Instructor tools ↗", 11, "#2DD4BF").setOrigin(1, 0)
-      .setInteractive({ useHandCursor: true })
-      .on("pointerup", () => window.open("instructor.html")));
   }
   cycleMap(dir){
     this.mapIdx = (this.mapIdx + dir + MAPS.length) % MAPS.length;
@@ -1195,7 +1191,7 @@ class MenuScene extends Phaser.Scene {
     const objs = [];
     const dim = this.add.rectangle(W/2, H/2, W, H, 0x0D1526, 0.8).setDepth(90)
       .setInteractive().on("pointerup", () => this.closeBank());
-    const pw = 640, ph = 330, x0 = W/2 - pw/2, top = (H - ph) / 2;
+    const pw = 760, ph = 420, x0 = (W - pw) / 2, top = (H - ph) / 2;
     const g = this.add.graphics().setDepth(91);
     g.fillStyle(PAL.panel, 0.98).fillRoundedRect(x0, top, pw, ph, 14);
     g.lineStyle(2, PAL.cyan, 1).strokeRoundedRect(x0, top, pw, ph, 14);
@@ -1204,29 +1200,35 @@ class MenuScene extends Phaser.Scene {
       const o = T(this, x, y, txt, size, color, extra).setDepth(92); objs.push(o); return o; };
     const btn = (x, y, w, h, label, size, fn, opts) => {
       const b = makeButton(this, x, y, w, h, label, size, fn, opts).setDepth(92); objs.push(b); return b; };
-    put(W/2, top + 18, "QUESTION BANK", 15, "#2DD4BF", { fontStyle:"bold" }).setOrigin(0.5);
+    put(x0 + 28, top + 20, "UPLOAD QUESTIONS", 22, PAL.text, { fontStyle:"bold" });
+    btn(x0 + pw - 32, top + 32, 40, 40, "X", 14, () => this.closeBank(), { line: PAL.red, color:"#F87171" });
+    put(x0 + 28, top + 62,
+      "Upload a .csv or .json question bank — it replaces the active bank and is kept across reloads.\n" +
+      "Required columns: question, choices (separate options with | ), answer (exact text of the correct choice).\n" +
+      "Optional: why, difficulty (easy/medium/hard), skin (theory/onboarding/both), category. Minimum " + QP.MIN_BANK + " valid questions.",
+      13, PAL.muted, { lineSpacing: 5 });
     const skinCount = BankState.questions.filter(q => q.skin === "both" || q.skin === G.skin).length;
     const mastered = Profile.masteredCount(BankState.questions);
-    put(x0 + 28, top + 46,
-      BankState.source + " · " + BankState.questions.length + " questions (" + skinCount + " for this skin)\n" +
-      "★ mastered " + mastered + " / " + BankState.questions.length +
+    put(x0 + 28, top + 148,
+      "Active bank: " + BankState.source + " — " + BankState.questions.length + " questions (" +
+      skinCount + " this track) · ★ " + mastered + " mastered" +
       (BankState.custom ? (BankState.persisted ? " · saved locally" : " · storage unavailable — this session only") : ""),
-      12, PAL.text, { lineSpacing: 5 });
-    const by = top + 128;
-    btn(x0 + 110, by, 160, 40, "Upload file", 13, () => document.getElementById("qfile").click());
-    btn(x0 + 300, by, 180, 40, "Reset to sample", 12, () => {
+      13, "#2DD4BF", { fontFamily: FONT_MONO });
+    const by = top + 192;
+    btn(x0 + 114, by, 172, 44, "CHOOSE FILE", 14, () => document.getElementById("qfile").click(),
+      { line: PAL.green, color:"#4ADE80" });
+    btn(x0 + 334, by, 226, 44, "DOWNLOAD TEMPLATE", 13, downloadTemplate);
+    btn(x0 + 582, by, 200, 44, "RESET TO SAMPLE", 13, () => {
       BankState.resetToSample();
       this.summary = { text: "Restored the bundled sample bank (" + BankState.questions.length + " questions).", color: "#4ADE80" };
       this.render(); this.closeBank(); this.openBank();
-    });
-    btn(x0 + 500, by, 170, 40, "CSV template", 12, downloadTemplate, { color: PAL.muted });
-    put(x0 + 28, top + 162,
-      "Drop a .csv or .json anywhere, or Upload. Columns: question, choices (A|B|C),\n" +
-      "answer (exact text), why, difficulty, skin, category.",
-      11, PAL.muted, { lineSpacing: 4 });
-    if (this.summary) put(x0 + 28, top + 212, this.summary.text, 11, this.summary.color,
+    }, { line: PAL.red, color:"#F87171" });
+    btn(x0 + 202, by + 50, 348, 40, "OPEN INSTRUCTOR TOOL", 13,
+      () => window.open("instructor.html"), { line: PAL.violet, color:"#A78BFA" });
+    put(x0 + 396, by + 40, "Write and edit questions in a full\nauthoring app, then install them here.", 11, PAL.muted, { lineSpacing: 2 });
+    put(x0 + pw/2, by + 78, "…or drag a file anywhere onto this window.", 12, PAL.muted).setOrigin(0.5, 0);
+    if (this.summary) put(x0 + 28, top + 318, this.summary.text, 12, this.summary.color,
       { wordWrap:{ width: pw - 56 }, lineSpacing: 3 });
-    put(W/2, top + ph - 18, "click outside to close", 9, PAL.muted).setOrigin(0.5);
     this.bankObjs = objs;
   }
   closeBank(){ if (this.bankObjs){ this.bankObjs.forEach(o => o.destroy()); this.bankObjs = null; } }
